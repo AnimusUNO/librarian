@@ -127,10 +127,17 @@ No new or renamed routes—only OpenAI's.
 
 ### 4 · Implementation Basics
 
-* Framework: FastAPI (as in Letta-Proxy).
+* Framework: FastAPI (inspired by Letta-Proxy).
 * Dependencies: `letta-client`, `fastapi`, `uvicorn`.
 * Endpoints live under `/v1/*` exactly matching OpenAI.
 * No non-spec routes except internal health checks (kept private).
+
+### 5 · Licensing & Attribution
+
+* **Base Implementation**: Soft fork of [wsargent/letta-openai-proxy](https://github.com/wsargent/letta-openai-proxy) (MIT License)
+* **Architectural Inspiration**: [ResonanceGroup/Letta-Proxy](https://github.com/ResonanceGroup/Letta-Proxy) (Apache 2.0)
+* **License**: MIT (inherited from base fork)
+* **Attribution**: Proper attribution to both projects in documentation
 
 ## Architecture & Flow
 
