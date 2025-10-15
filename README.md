@@ -70,6 +70,12 @@ venv\Scripts\Activate.ps1  # Windows
 
 # Install dependencies
 pip install -r requirements.txt
+
+# For development and testing (optional)
+pip install -r requirements-test.txt
+
+# Or use the dependency management script
+python manage_deps.py install-all
 ```
 
 ### Configuration
@@ -139,7 +145,49 @@ for chunk in response:
 
 ## Development
 
-### Project Structure
+#### Dependency Management
+
+The project uses separated requirements files for better dependency management:
+
+- **`requirements.txt`** - Production dependencies only
+- **`requirements-test.txt`** - Development and testing dependencies
+
+Use the dependency management script for common tasks:
+
+```bash
+# Install all dependencies
+python manage_deps.py install-all
+
+# Install only production dependencies
+python manage_deps.py install-prod
+
+# Install only test dependencies
+python manage_deps.py install-test
+
+# Format code
+python manage_deps.py format
+
+# Lint code
+python manage_deps.py lint
+
+# Run tests
+python manage_deps.py test
+
+# Full development setup
+python manage_deps.py all
+```
+
+#### Code Quality
+
+The project uses several tools for code quality:
+
+- **Black** - Code formatting
+- **isort** - Import sorting
+- **flake8** - Linting
+- **mypy** - Type checking
+- **pytest** - Testing framework
+
+#### Project Structure
 
 ```
 librarian/
@@ -153,7 +201,8 @@ librarian/
 ├── venv/                    # Virtual environment (gitignored)
 ├── tmp/                     # Temporary files (gitignored)
 ├── .gitignore              # Git ignore rules
-├── requirements.txt        # Python dependencies
+├── requirements.txt        # Production dependencies
+├── requirements-test.txt    # Development and testing dependencies
 └── README.md              # This file
 ```
 
