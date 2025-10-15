@@ -74,6 +74,64 @@ The middleware discards this reasoning output before returning the final message
 > "Use your reasoning block to silently determine whether to act in Worker or Persona mode.
 > Do not reveal this process; only the final response should be returned."
 
+## ✅ Confirmed Scope for The Librarian Proxy
+
+**Goal:**
+Expose the OpenAI `/v1/chat/completions` endpoint (and selected related endpoints) through a Letta-backed, stateful agent—without changing the OpenAI schema or introducing non-spec fields.
+
+---
+
+### 1 · Core Chat Completions Mapping
+
+| OpenAI field                         | Letta equivalent         | Notes                                   |
+| ------------------------------------ | ------------------------ | --------------------------------------- |
+| `model`                              | mapped to Letta agent ID | simple lookup (`model_name → agent_id`) |
+| `messages[]`                         | `MessageCreate` objects  | direct 1 : 1 translation                |
+| `tools[]`                            | `/tools` API             | dynamic synchronization before call     |
+| `stream`                             | `create_stream()`        | direct streaming mapping                |
+| `temperature`, `top_p`, `max_tokens` | provider-level params    | pass through unchanged                  |
+| `user`                               | Letta identity           | used for contextual persistence         |
+
+**System messages:** converted to temporary memory overlays, not sent as normal messages.
+**Reasoning output:** generated privately inside the Letta reasoning block; middleware discards it before returning.
+
+---
+
+### 2 · Supported Endpoints (Strict OpenAI Compatibility)
+
+| Endpoint                        | Status                 | Mapping source                |
+| ------------------------------- | ---------------------- | ----------------------------- |
+| `POST /v1/chat/completions`     | ✅ Full                 | `agents/{id}/messages/create` |
+| `GET /v1/models`                | ✅ List                 | Letta model registry          |
+| `GET /v1/models/{id}`           | ✅ Detail               | `client.model_info()`         |
+| `POST /v1/completions`          | ⚙️ Alias               | single-turn message           |
+| `POST /v1/embeddings`           | ⚙️ Optional            | Letta embedding tool          |
+| others (audio/images/fine-tune) | ❌ Out of scope for now | —                             |
+
+No new or renamed routes—only OpenAI's.
+
+---
+
+### 3 · Behavioral Rules
+
+* **Two dispositions:**
+
+  * *Worker Mode* = follow prompt literally.
+  * *Persona Mode* = inject Librarian's voice when judged appropriate.
+* **Mode decision:** made inside reasoning block each call; never surfaced.
+* **Middleware:** removes reasoning key, returns only `message.content`.
+* **Memory:** persistence handled by Letta archival blocks; OpenAI clients remain stateless.
+* **Error handling:** must return standard OpenAI error shapes (`error: {message,type,param,code}`).
+
+---
+
+### 4 · Implementation Basics
+
+* Framework: FastAPI (as in Letta-Proxy).
+* Dependencies: `letta-client`, `fastapi`, `uvicorn`.
+* Endpoints live under `/v1/*` exactly matching OpenAI.
+* No non-spec routes except internal health checks (kept private).
+
 ## Architecture & Flow
 
 ### API Layer (OpenAI-Compatible Gateway)

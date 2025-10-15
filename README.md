@@ -2,17 +2,14 @@
 
 ## Python Virtual Environment Setup
 
-This project uses a Python virtual environment located in the `python/` folder.
+This project uses a Python virtual environment located in the `venv/` folder.
 
 ### Quick Start
 
 1. **Activate the virtual environment:**
    ```powershell
    # Windows PowerShell
-   .\activate_venv.ps1
-   
-   # Or manually:
-   python\venv\Scripts\Activate.ps1
+   venv\Scripts\Activate.ps1
    ```
 
 2. **Install dependencies:**
@@ -31,17 +28,16 @@ This project uses a Python virtual environment located in the `python/` folder.
 librarian/
 ├── .gitignore          # Git ignore rules for Python projects
 ├── requirements.txt    # Python dependencies
-├── activate_venv.ps1   # Virtual environment activation script
-└── python/
-    └── venv/           # Virtual environment (ignored by git)
+├── venv/               # Virtual environment (ignored by git)
+└── docs/               # Project documentation
 ```
 
 ### Development
 
-- The virtual environment is already set up in `python/venv/`
+- The virtual environment is already set up in `venv/`
 - Add your project dependencies to `requirements.txt`
 - The `.gitignore` file includes comprehensive Python ignore patterns
-- Use the provided PowerShell script to easily activate the environment
+- Activate the environment using `venv\Scripts\Activate.ps1`
 
 ### Notes
 

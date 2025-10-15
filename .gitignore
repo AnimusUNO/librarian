@@ -232,5 +232,5 @@ secrets.json
 .secrets
 
 # Project specific
-python/venv/
-python/env/
+venv/
+env/
