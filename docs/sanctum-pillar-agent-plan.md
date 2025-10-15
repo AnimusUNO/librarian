@@ -139,6 +139,29 @@ No new or renamed routes—only OpenAI's.
 * **License**: MIT (inherited from base fork)
 * **Attribution**: Proper attribution to both projects in documentation
 
+### 6 · Server Configuration & Deployment
+
+#### Agent Creation Status
+* **Librarian Agent**: ❌ Not yet created (manual setup with Athena)
+* **System Instructions**: ❌ Pending creation
+* **Persona Block**: ❌ Pending creation
+* **Memory Blocks**: ❌ Pending creation
+* **Tool Attachments**: ❌ Pending creation
+
+#### Installation Phases
+* **Phase 1**: Manual agent creation and configuration
+* **Phase 2**: Automated installer development
+* **Phase 3**: Production deployment and integration
+
+#### Planned Installer Features
+* Automated Librarian agent creation
+* Pre-built configuration templates
+* System instructions and persona block setup
+* Memory block configuration
+* Tool attachment and validation
+* Health checks and configuration verification
+* Seamless Sanctum/Animus server integration
+
 ## Architecture & Flow
 
 ### API Layer (OpenAI-Compatible Gateway)
