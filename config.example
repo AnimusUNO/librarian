@@ -1,29 +1,168 @@
 # The Librarian Configuration
+# Copy this file to 'config' and update the values for your environment
 
-# Server Configuration
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+
+# Server host and port
 LIBRARIAN_HOST=127.0.0.1
 LIBRARIAN_PORT=8000
+
+# Debug mode (enables hot reload, detailed logging, and API docs)
 LIBRARIAN_DEBUG=false
 
-# Letta Server Configuration
+# Enable API documentation (Swagger/ReDoc) even in production
+LIBRARIAN_ENABLE_DOCS=false
+
+# Application metadata
+LIBRARIAN_TITLE=The Librarian
+LIBRARIAN_DESCRIPTION=OpenAI-Compatible Letta Proxy
+LIBRARIAN_VERSION=0.1.0
+
+# =============================================================================
+# LETTA SERVER CONFIGURATION
+# =============================================================================
+
+# Letta server connection
 LETTA_BASE_URL=https://sanctum.zero1.network:8283
 LETTA_API_KEY=your_api_key_here
 
-# Agent Configuration
+# Letta client timeout (seconds)
+LETTA_TIMEOUT=30
+
+# =============================================================================
+# AGENT CONFIGURATION
+# =============================================================================
+
+# Default agent IDs for different models
 LIBRARIAN_WORKER_AGENT=librarian-worker
 LIBRARIAN_PERSONA_AGENT=librarian-persona
 LIBRARIAN_PERSONA_TURBO_AGENT=librarian-persona-turbo
 
-# Security Configuration
+# Custom model configurations (JSON format)
+# Example: {"custom-model": {"agent_id": "custom-agent", "mode": "worker", "description": "Custom model"}}
+LIBRARIAN_CUSTOM_MODELS=
+
+# Additional model configurations (JSON format)
+# This allows adding more models without modifying the core configuration
+LIBRARIAN_ADDITIONAL_MODELS=
+
+# =============================================================================
+# SECURITY CONFIGURATION
+# =============================================================================
+
+# IP filtering
 LIBRARIAN_ENABLE_IP_FILTERING=false
 LIBRARIAN_ALLOWED_IPS=
 LIBRARIAN_BLOCKED_IPS=
+
+# API key authentication
 LIBRARIAN_API_KEY_REQUIRED=false
+LIBRARIAN_API_KEY=
+
+# =============================================================================
+# RATE LIMITING CONFIGURATION
+# =============================================================================
+
+# Rate limiting settings
 LIBRARIAN_RATE_LIMIT_ENABLED=false
 LIBRARIAN_RATE_LIMIT_REQUESTS=100
 LIBRARIAN_RATE_LIMIT_WINDOW=60
 
-# Logging Configuration
+# =============================================================================
+# PERFORMANCE CONFIGURATION
+# =============================================================================
+
+# Request limits
+LIBRARIAN_MAX_REQUEST_SIZE=10485760
+LIBRARIAN_REQUEST_TIMEOUT=300
+LIBRARIAN_KEEP_ALIVE_TIMEOUT=5
+
+# Load management
+LIBRARIAN_MAX_CONCURRENT=10
+LIBRARIAN_DUPLICATION_THRESHOLD=8
+LIBRARIAN_QUEUE_TIMEOUT=300
+LIBRARIAN_CLEANUP_INTERVAL=60
+LIBRARIAN_ENABLE_AUTO_DUPLICATION=true
+LIBRARIAN_MAX_CLONES_PER_AGENT=3
+
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
+
+# Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LIBRARIAN_LOG_LEVEL=INFO
+
+# Log format (Python logging format string)
+LIBRARIAN_LOG_FORMAT=%(asctime)s - %(name)s - %(levelname)s - %(message)s
+
+# Security event logging
 LIBRARIAN_LOG_SECURITY_EVENTS=true
+
+# Audit logging
 LIBRARIAN_AUDIT_ENABLED=false
+
+# =============================================================================
+# ADVANCED FEATURES
+# =============================================================================
+
+# Tool synchronization
+LIBRARIAN_ENABLE_TOOL_SYNC=true
+LIBRARIAN_TOOL_SYNC_TIMEOUT=30
+
+# Memory management
+LIBRARIAN_ENABLE_MEMORY_MANAGEMENT=true
+LIBRARIAN_MEMORY_CLEANUP_INTERVAL=3600
+
+# Streaming configuration
+LIBRARIAN_STREAMING_ENABLED=true
+LIBRARIAN_STREAMING_CHUNK_SIZE=1024
+
+# =============================================================================
+# MONITORING & HEALTH CHECKS
+# =============================================================================
+
+# Health check configuration
+LIBRARIAN_HEALTH_CHECK_ENABLED=true
+LIBRARIAN_HEALTH_CHECK_INTERVAL=30
+
+# Metrics collection
+LIBRARIAN_METRICS_ENABLED=false
+LIBRARIAN_METRICS_PORT=9090
+
+# =============================================================================
+# DEVELOPMENT CONFIGURATION
+# =============================================================================
+
+# Development mode settings
+LIBRARIAN_DEV_MODE=false
+LIBRARIAN_DEV_RELOAD=true
+LIBRARIAN_DEV_LOG_REQUESTS=false
+
+# Testing configuration
+LIBRARIAN_TEST_MODE=false
+LIBRARIAN_TEST_TIMEOUT=10
+
+# =============================================================================
+# EXAMPLES AND NOTES
+# =============================================================================
+
+# Example custom model configuration:
+# LIBRARIAN_CUSTOM_MODELS={"gpt-4-custom": {"agent_id": "custom-agent", "mode": "persona", "description": "Custom GPT-4 model"}}
+
+# Example additional models:
+# LIBRARIAN_ADDITIONAL_MODELS={"claude-3": {"agent_id": "claude-agent", "mode": "worker", "description": "Claude 3 model"}}
+
+# Example IP filtering:
+# LIBRARIAN_ALLOWED_IPS=192.168.1.0/24,10.0.0.0/8
+# LIBRARIAN_BLOCKED_IPS=192.168.1.100,10.0.0.50
+
+# Example rate limiting:
+# LIBRARIAN_RATE_LIMIT_REQUESTS=1000
+# LIBRARIAN_RATE_LIMIT_WINDOW=3600
+
+# Example performance tuning:
+# LIBRARIAN_MAX_CONCURRENT=50
+# LIBRARIAN_DUPLICATION_THRESHOLD=40
+# LIBRARIAN_MAX_CLONES_PER_AGENT=5

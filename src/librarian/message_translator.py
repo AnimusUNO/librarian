@@ -2,6 +2,7 @@
 Message Translator for The Librarian
 
 Converts OpenAI messages to Letta MessageCreate format.
+Handles system messages via memory overlays and dual-mode behavior.
 """
 
 from typing import List, Dict, Tuple, Optional
@@ -33,6 +34,7 @@ class MessageTranslator:
         for msg in openai_messages:
             if msg["role"] == "system":
                 # Extract system content for memory overlay
+                # System messages are NOT sent as normal messages
                 system_content = msg["content"]
             elif msg["role"] == "user":
                 letta_messages.append({
@@ -52,6 +54,29 @@ class MessageTranslator:
                 })
         
         return letta_messages, system_content
+    
+    def create_mode_selection_instruction(self, mode: str) -> str:
+        """
+        Create system instruction for dual-mode behavior
+        
+        Args:
+            mode: Either 'worker' or 'persona'
+            
+        Returns:
+            System instruction for mode selection
+        """
+        base_instruction = """Use your reasoning block to silently determine whether to act in Worker or Persona mode.
+Do not reveal this process; only the final response should be returned.
+
+Worker Mode: Follow instructions literally with minimal narrative. Use for procedural, technical, or mechanical tasks.
+Persona Mode: Engage as The Librarian with expressive, interpretive responses. Use when judgment, authorship, or creative insight is requested."""
+        
+        if mode == "worker":
+            return base_instruction + "\n\nCurrent context suggests Worker Mode is appropriate."
+        elif mode == "persona":
+            return base_instruction + "\n\nCurrent context suggests Persona Mode is appropriate."
+        else:
+            return base_instruction
     
     def extract_system_messages(self, openai_messages: List[Dict[str, str]]) -> List[str]:
         """Extract all system messages from OpenAI messages"""

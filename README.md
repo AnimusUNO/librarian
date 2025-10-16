@@ -5,6 +5,49 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Documentation License: CC BY-SA 4.0](https://img.shields.io/badge/Documentation%20License-CC%20BY--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-sa/4.0/)
 
+## Quick Start
+
+### 1. Setup Environment
+```bash
+# Clone the repository
+git clone <repository-url>
+cd librarian
+
+# Create and activate virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 2. Configure
+```bash
+# Copy configuration template
+copy config.example config
+
+# Edit config file with your Letta server details
+# Update LETTA_BASE_URL and LETTA_API_KEY
+```
+
+### 3. Start The Librarian
+```bash
+python main.py
+```
+
+### 4. Test Integration
+```bash
+# Run all tests
+python tests/run_tests.py
+
+# Or run individual tests
+python tests/test_librarian_integration.py
+python tests/validate_config.py
+```
+
+The server will be available at `http://127.0.0.1:8000` with full OpenAI API compatibility.
+
 ## Overview
 
 The Librarian is a stateful, OpenAI-compatible gateway that allows Sanctum systems and external clients to interface with a persistent Letta agent (with memory, tools, and reasoning) while still speaking the standard OpenAI API protocol.

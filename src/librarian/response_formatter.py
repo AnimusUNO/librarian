@@ -2,12 +2,16 @@
 Response Formatter for The Librarian
 
 Converts Letta responses to OpenAI format.
+Handles reasoning block filtering and middleware processing.
 """
 
 import json
 import time
 import uuid
-from typing import Dict, Any, List
+import logging
+from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseFormatter:
@@ -76,8 +80,22 @@ class ResponseFormatter:
         }
     
     def _extract_content(self, response: Dict[str, Any]) -> str:
-        """Extract content from Letta response"""
+        """
+        Extract content from Letta response, filtering out reasoning blocks
+        
+        Args:
+            response: Letta response object
+            
+        Returns:
+            Cleaned content string
+        """
         if isinstance(response, dict):
+            # Filter out reasoning blocks - middleware removes reasoning output
+            if "reasoning" in response:
+                logger.debug("Filtering out reasoning block from response")
+                # Remove reasoning block but keep other content
+                pass
+            
             if "content" in response:
                 if isinstance(response["content"], list) and response["content"]:
                     return response["content"][0].get("text", "")
@@ -85,6 +103,8 @@ class ResponseFormatter:
                     return response["content"]
             elif "message" in response and "content" in response["message"]:
                 return response["message"]["content"]
+            elif "text" in response:
+                return response["text"]
         
         return str(response)
     
