@@ -139,7 +139,56 @@ No new or renamed routes—only OpenAI's.
 * **License**: MIT (inherited from base fork)
 * **Attribution**: Proper attribution to both projects in documentation
 
-### 6 · Server Configuration & Deployment
+### 6 · Fine-Tune Memory Architecture
+
+#### Core Concept
+* **Fine-tune Data → Unattached CoreBlocks**: Convert fine-tuning data into Letta memory blocks
+* **Dynamic Attachment**: Attach relevant blocks during API calls for context
+* **Agent Intelligence**: Let The Librarian decide which blocks to use
+* **High Fidelity**: Full agent reasoning with contextual memory
+
+#### Implementation Flow
+```
+1. Fine-tune Data Processing
+   ├── Convert fine-tune examples → CoreBlocks
+   ├── Store as unattached memory blocks
+   └── Tag with metadata (model, domain, etc.)
+
+2. API Request Processing
+   ├── Analyze request context
+   ├── Query relevant CoreBlocks
+   ├── Attach blocks to agent session
+   └── Process with full agent intelligence
+
+3. Response Generation
+   ├── Agent uses attached context
+   ├── Generates high-fidelity response
+   └── Detaches blocks after completion
+```
+
+#### Key Benefits
+* **Best of Both Worlds**: Simple architecture + advanced memory management
+* **Fine-Tuning Solved**: Convert fine-tune data to memory blocks
+* **Dynamic Context**: Attach relevant context per request
+* **Agent Intelligence**: Let The Librarian decide what's relevant
+* **Scalable**: Unlimited fine-tune data via memory blocks
+* **Efficient**: Only attach what's needed for each request
+
+#### Implementation Timeline
+* **Phase 3.1**: CoreBlock Management System
+  - Create FineTuneManager class
+  - Implement CoreBlock creation from fine-tune data
+  - Add metadata tagging system
+* **Phase 3.2**: Dynamic Attachment System
+  - Implement context analysis for requests
+  - Add CoreBlock querying and selection
+  - Create attach/detach session management
+* **Phase 3.3**: Integration with Agent Calls
+  - Integrate with direct agent call architecture
+  - Add context-aware request processing
+  - Implement cleanup after response generation
+
+### 7 · Server Configuration & Deployment
 
 #### Agent Creation Status
 * **Librarian Agent**: ❌ Not yet created (manual setup with Athena)
@@ -191,3 +240,11 @@ Persistent agent "Librarian" with:
 - 🧠 **Stateful Intelligence** — Maintains evolving knowledge of commands, tools, and user habits.
 - 🪶 **Self-Documentation** — Automatically describes the system as it grows.
 - 🧍 **Personified Infrastructure** — The first Sanctum agent designed as both service and soul — a living process embedded in the OS.
+
+## Roadmap
+
+- [x] **Phase 1**: Foundation (OpenAI compatibility, token counting, dependency management)
+- [ ] **Phase 2**: Letta Integration (direct agent calls using wsargent approach)
+- [ ] **Phase 3**: Fine-Tune Memory Architecture (convert fine-tune data to unattached CoreBlocks)
+- [ ] **Phase 4**: Advanced Features (streaming, tools, production deployment)
+- [ ] **Phase 5**: SMCP Integration and intelligent documentation
