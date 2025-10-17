@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 def validate_config():
     """Validate The Librarian configuration"""
-    print("🔍 Validating The Librarian Configuration...")
+    print("Validating The Librarian Configuration...")
     
     # Load environment variables
     load_dotenv()
@@ -91,20 +91,20 @@ def validate_config():
     
     # Print results
     if errors:
-        print("\n❌ Configuration Errors:")
+        print("\nConfiguration Errors:")
         for error in errors:
             print(f"  • {error}")
     
     if warnings:
-        print("\n⚠️  Configuration Warnings:")
+        print("\nConfiguration Warnings:")
         for warning in warnings:
             print(f"  • {warning}")
     
     if not errors and not warnings:
-        print("\n✅ Configuration is valid!")
+        print("\nConfiguration is valid!")
     
     # Print current configuration summary
-    print("\n📋 Current Configuration Summary:")
+    print("\nCurrent Configuration Summary:")
     print(f"  Server: {os.getenv('LIBRARIAN_HOST', '127.0.0.1')}:{os.getenv('LIBRARIAN_PORT', '8000')}")
     print(f"  Debug Mode: {os.getenv('LIBRARIAN_DEBUG', 'false')}")
     print(f"  Letta URL: {os.getenv('LETTA_BASE_URL', 'Not set')}")
@@ -118,17 +118,17 @@ def validate_config():
 
 def main():
     """Main function"""
-    print("🔧 The Librarian Configuration Validator")
+    print("The Librarian Configuration Validator")
     print("=" * 50)
     
     valid = validate_config()
     
     if valid:
-        print("\n🎉 Configuration validation passed!")
+        print("\nConfiguration validation passed!")
         print("You can now start The Librarian with: python main.py")
         sys.exit(0)
     else:
-        print("\n❌ Configuration validation failed!")
+        print("\nConfiguration validation failed!")
         print("Please fix the errors above before starting The Librarian.")
         sys.exit(1)
 

@@ -24,7 +24,7 @@ VERBOSE_OUTPUT = os.getenv("LIBRARIAN_TEST_VERBOSE", "false").lower() == "true"
 
 async def test_health_check():
     """Test health check endpoint"""
-    print("🔍 Testing health check...")
+    print("Testing health check...")
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{LIBRARIAN_BASE_URL}/health")
         print(f"Health check status: {response.status_code}")
@@ -33,7 +33,7 @@ async def test_health_check():
 
 async def test_models_endpoint():
     """Test models listing endpoint"""
-    print("\n🔍 Testing models endpoint...")
+    print("\nTesting models endpoint...")
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{LIBRARIAN_BASE_URL}/v1/models")
         print(f"Models endpoint status: {response.status_code}")
@@ -44,7 +44,7 @@ async def test_models_endpoint():
 
 async def test_chat_completion(model: str = "gpt-3.5-turbo"):
     """Test chat completion endpoint"""
-    print(f"\n🔍 Testing chat completion with model: {model}")
+    print(f"\nTesting chat completion with model: {model}")
     
     payload = {
         "model": model,
@@ -76,19 +76,19 @@ async def test_chat_completion(model: str = "gpt-3.5-turbo"):
                 return False
                 
         except httpx.TimeoutException:
-            print("❌ Request timed out - Letta server may not be running")
+            print("Request timed out - Letta server may not be running")
             return False
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"Error: {str(e)}")
             return False
 
 async def test_streaming_completion(model: str = "gpt-3.5-turbo"):
     """Test streaming chat completion"""
     if not ENABLE_STREAMING_TESTS:
-        print(f"\n⏭️  Skipping streaming test (disabled)")
+        print(f"\nSkipping streaming test (disabled)")
         return True
         
-    print(f"\n🔍 Testing streaming completion with model: {model}")
+    print(f"\nTesting streaming completion with model: {model}")
     
     payload = {
         "model": model,
@@ -115,7 +115,7 @@ async def test_streaming_completion(model: str = "gpt-3.5-turbo"):
                         if line.startswith("data: "):
                             data = line[6:]  # Remove "data: " prefix
                             if data.strip() == "[DONE]":
-                                print("\n✅ Stream completed")
+                                print("\nStream completed")
                                 break
                             try:
                                 chunk = json.loads(data)
@@ -132,15 +132,15 @@ async def test_streaming_completion(model: str = "gpt-3.5-turbo"):
                     return False
                     
         except httpx.TimeoutException:
-            print("❌ Streaming request timed out")
+            print("Streaming request timed out")
             return False
         except Exception as e:
-            print(f"❌ Streaming error: {str(e)}")
+            print(f"Streaming error: {str(e)}")
             return False
 
 async def main():
     """Run all tests"""
-    print("🚀 Starting Librarian Integration Tests")
+    print("Starting Librarian Integration Tests")
     print(f"Testing against: {LIBRARIAN_BASE_URL}")
     print(f"Test timeout: {TEST_TIMEOUT}s")
     print(f"Test models: {TEST_MODELS}")
@@ -164,27 +164,27 @@ async def main():
             result = await test_coro
             results.append((test_name, result))
             if result:
-                print(f"✅ {test_name}: PASSED")
+                print(f"PASS: {test_name}")
             else:
-                print(f"❌ {test_name}: FAILED")
+                print(f"FAIL: {test_name}")
         except Exception as e:
-            print(f"❌ {test_name}: ERROR - {str(e)}")
+            print(f"ERROR: {test_name} - {str(e)}")
             results.append((test_name, False))
     
-    print(f"\n📊 Test Results:")
+    print(f"\nTest Results:")
     passed = sum(1 for _, result in results if result)
     total = len(results)
     
     for test_name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
+        status = "PASS" if result else "FAIL"
         print(f"  {test_name}: {status}")
     
     print(f"\nOverall: {passed}/{total} tests passed")
     
     if passed == total:
-        print("🎉 All tests passed! The Librarian is fully functional.")
+        print("All tests passed! The Librarian is fully functional.")
     else:
-        print("⚠️  Some tests failed. Check the Letta server connection and configuration.")
+        print("Some tests failed. Check the Letta server connection and configuration.")
 
 if __name__ == "__main__":
     asyncio.run(main())
