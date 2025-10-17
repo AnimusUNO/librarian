@@ -141,8 +141,7 @@ async def handle_non_streaming_response(
         # Create message with Letta client
         response = letta_client.agents.messages.create(
             agent_id=agent_id,
-            messages=message_objects,
-            identity_id=user_id
+            messages=message_objects
         )
         
         # Extract response content
@@ -189,8 +188,7 @@ async def handle_streaming_response(
             # Create streaming message with Letta client
             stream = letta_client.agents.messages.create_stream(
                 agent_id=agent_id,
-                messages=message_objects,
-                identity_id=user_id
+                messages=message_objects
             )
             
             response_id = f"chatcmpl-{uuid.uuid4().hex}"
