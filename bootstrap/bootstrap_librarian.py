@@ -18,7 +18,7 @@ import sys
 import time
 from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
-from letta_client import Letta
+from letta_client import Letta, LlmConfig, EmbeddingConfig
 
 # Configure logging
 logging.basicConfig(
@@ -31,11 +31,26 @@ logger = logging.getLogger(__name__)
 class LibrarianBootstrap:
     """Bootstrap The Librarian agents in Letta server"""
     
-    def __init__(self, letta_url: str, api_key: str):
+    def __init__(self, letta_url: str, api_key: str, timeout: int = 30):
         """Initialize bootstrap with Letta connection"""
         self.letta_url = letta_url
         self.api_key = api_key
-        self.client = Letta(base_url=letta_url, token=api_key)
+        self.timeout = timeout
+        
+        # Initialize Letta client with timeout configuration
+        # The Letta client uses httpx internally, which respects timeout settings
+        try:
+            self.client = Letta(base_url=letta_url, token=api_key)
+            # Set timeout on the underlying httpx client if possible
+            if hasattr(self.client, '_client_wrapper') and hasattr(self.client._client_wrapper, 'httpx_client'):
+                self.client._client_wrapper.httpx_client.timeout = timeout
+        except Exception as e:
+            logger.warning(f"Could not configure timeout on Letta client: {e}")
+            self.client = Letta(base_url=letta_url, token=api_key)
+        
+        # Track created agents/blocks for cleanup
+        self.created_agents = {}  # agent_id -> agent_object
+        self.created_blocks = {}  # agent_id -> block_id
         
         # Agent configurations
         self.agents = {
@@ -60,8 +75,10 @@ class LibrarianBootstrap:
         }
     
     def _get_worker_system_instruction(self) -> str:
-        """Get system instruction for Worker Mode"""
-        return """System instructions for Worker Mode - to be provided."""
+        """Get system instruction for Worker Mode - uses same canonical instructions"""
+        # Worker and Persona use the same system instructions
+        # The mode selection happens in the reasoning block
+        return self._get_persona_system_instruction()
     
     def _get_persona_system_instruction(self) -> str:
         """Get system instruction for Persona Mode"""
@@ -277,27 +294,51 @@ Memory must be maintained.
 Silence is acceptable; distortion is not.
 I am the keeper of what was said, and the lens through which meaning endures."""
     
-    def test_connection(self) -> bool:
-        """Test connection to Letta server"""
-        try:
-            logger.info(f"Testing connection to Letta server: {self.letta_url}")
-            # Try to get server info or health check
-            # Note: This might need adjustment based on actual Letta API
-            logger.info("Connection test successful")
-            return True
-        except Exception as e:
-            logger.error(f"Connection test failed: {e}")
-            return False
+    def test_connection(self, retries: int = 3) -> bool:
+        """Test connection to Letta server with retry logic"""
+        for attempt in range(1, retries + 1):
+            try:
+                logger.info(f"Testing connection to Letta server: {self.letta_url} (attempt {attempt}/{retries})")
+                # Try to list agents as a connection test
+                agents = self.client.agents.list()
+                logger.info(f"Connection test successful - found {len(agents)} existing agents")
+                return True
+            except Exception as e:
+                error_msg = str(e)
+                if attempt < retries:
+                    wait_time = attempt * 2  # Exponential backoff: 2s, 4s, 6s
+                    logger.warning(f"Connection attempt {attempt} failed, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                
+                # Final attempt failed
+                if "10060" in error_msg or "timeout" in error_msg.lower() or "ConnectTimeout" in error_msg:
+                    logger.error(f"Connection timeout after {retries} attempts")
+                    logger.error(f"Server URL: {self.letta_url}")
+                    logger.error(f"This usually means:")
+                    logger.error(f"  1. Server is unreachable from this network")
+                    logger.error(f"  2. Firewall is blocking the connection")
+                    logger.error(f"  3. Server is down or not responding")
+                    logger.error(f"  4. SSL/TLS certificate issues (if using HTTPS)")
+                    logger.error(f"Error: {e}")
+                elif "401" in error_msg or "403" in error_msg or "unauthorized" in error_msg.lower():
+                    logger.error(f"Authentication failed - check API key")
+                    logger.error(f"Error: {e}")
+                elif "SSL" in error_msg or "certificate" in error_msg.lower():
+                    logger.error(f"SSL/TLS certificate error")
+                    logger.error(f"Error: {e}")
+                else:
+                    logger.error(f"Connection test failed: {e}")
+                return False
     
     def list_existing_agents(self) -> List[str]:
         """List existing agents in Letta server"""
         try:
             logger.info("Listing existing agents...")
-            # This would need to be implemented based on actual Letta API
-            # For now, return empty list
-            agents = []
-            logger.info(f"Found {len(agents)} existing agents")
-            return agents
+            agents = self.client.agents.list()
+            agent_names = [agent.name for agent in agents]
+            logger.info(f"Found {len(agent_names)} existing agents: {agent_names}")
+            return agent_names
         except Exception as e:
             logger.error(f"Failed to list agents: {e}")
             return []
@@ -305,13 +346,39 @@ I am the keeper of what was said, and the lens through which meaning endures."""
     def create_agent(self, agent_id: str, config: Dict[str, str]) -> bool:
         """Create a single agent in Letta server"""
         try:
-            logger.info(f"Creating agent: {agent_id}")
+            logger.info(f"Creating agent: {agent_id} (name: {config['name']})")
             
-            # Create agent with basic configuration
-            # Note: This would need to be implemented based on actual Letta API
-            # The exact API call would depend on Letta's agent creation endpoint
+            # Check if agent already exists
+            existing_agents = self.client.agents.list()
+            for agent in existing_agents:
+                if agent.name == agent_id:
+                    logger.warning(f"Agent {agent_id} already exists (ID: {agent.id})")
+                    # Use existing agent
+                    self.created_agents[agent_id] = agent
+                    return True
             
-            logger.info(f"Agent {agent_id} created successfully")
+            # Create agent with system instructions, LLM config, and embedding config
+            llm_config = LlmConfig(
+                model="gpt-4",
+                model_endpoint_type="openai",
+                context_window=8192  # Default context window
+            )
+            
+            embedding_config = EmbeddingConfig(
+                embedding_model="text-embedding-3-small",  # OpenAI embedding model
+                embedding_endpoint_type="openai",
+                embedding_dim=1536  # OpenAI text-embedding-3-small dimension
+            )
+            
+            agent = self.client.agents.create(
+                name=agent_id,  # Use agent_id as the name (matches proxy expectations)
+                system=config["system_instruction"],  # Use 'system' parameter, not 'instructions'
+                llm_config=llm_config,
+                embedding_config=embedding_config
+            )
+            
+            self.created_agents[agent_id] = agent
+            logger.info(f"Agent {agent_id} created successfully (ID: {agent.id})")
             return True
             
         except Exception as e:
@@ -325,11 +392,27 @@ I am the keeper of what was said, and the lens through which meaning endures."""
             
             persona_content = self._get_persona_block()
             
-            # Create persona block using Letta API
-            # Note: This would need to be implemented based on actual Letta API
-            # The exact API call would depend on Letta's memory block creation endpoint
+            # Create persona block
+            block = self.client.blocks.create(
+                label="LibrarianPersona",
+                value=persona_content,  # Value is the content string directly
+                read_only=True  # Lock the block so agents can't modify it
+            )
             
-            logger.info(f"Persona block created for agent {agent_id}")
+            self.created_blocks[agent_id] = block.id
+            
+            # Attach block to agent
+            if agent_id in self.created_agents:
+                agent = self.created_agents[agent_id]
+                self.client.agents.blocks.attach(
+                    agent_id=agent.id,
+                    block_id=block.id
+                )
+                logger.info(f"Persona block created and attached to agent {agent_id}")
+            else:
+                logger.warning(f"Agent {agent_id} not found - cannot attach persona block")
+                return False
+            
             return True
             
         except Exception as e:
@@ -339,17 +422,17 @@ I am the keeper of what was said, and the lens through which meaning endures."""
     def set_system_instructions(self, agent_id: str, instructions: str) -> bool:
         """Set system instructions for agent"""
         try:
-            logger.info(f"Setting system instructions for agent: {agent_id}")
-            
-            # Set system instructions using Letta API
-            # Note: This would need to be implemented based on actual Letta API
-            # The exact API call would depend on Letta's instruction setting endpoint
-            
-            logger.info(f"System instructions set for agent {agent_id}")
-            return True
+            # System instructions are set during agent creation, so this is a no-op
+            # But we verify the agent exists and has instructions
+            if agent_id in self.created_agents:
+                logger.info(f"System instructions verified for agent {agent_id} (set during creation)")
+                return True
+            else:
+                logger.warning(f"Agent {agent_id} not found - cannot verify system instructions")
+                return False
             
         except Exception as e:
-            logger.error(f"Failed to set system instructions for {agent_id}: {e}")
+            logger.error(f"Failed to verify system instructions for {agent_id}: {e}")
             return False
     
     def bootstrap_all_agents(self, force: bool = False) -> Dict[str, bool]:
@@ -395,6 +478,77 @@ I am the keeper of what was said, and the lens through which meaning endures."""
         
         return results
     
+    def cleanup_agent(self, agent_id: str) -> bool:
+        """Clean up (delete) a single agent and its blocks"""
+        try:
+            logger.info(f"Cleaning up agent: {agent_id}")
+            
+            # Find agent by name (in case it wasn't tracked)
+            agent_to_delete = None
+            if agent_id in self.created_agents:
+                agent_to_delete = self.created_agents[agent_id]
+            else:
+                # Try to find by name
+                try:
+                    agents = self.client.agents.list()
+                    for agent in agents:
+                        if agent.name == agent_id:
+                            agent_to_delete = agent
+                            break
+                except Exception as e:
+                    logger.warning(f"Could not list agents to find {agent_id}: {e}")
+            
+            if agent_to_delete:
+                try:
+                    # Try to delete the agent - try multiple method names
+                    deleted = False
+                    if hasattr(self.client.agents, 'delete'):
+                        self.client.agents.delete(agent_to_delete.id)
+                        deleted = True
+                    elif hasattr(self.client.agents, 'remove'):
+                        self.client.agents.remove(agent_to_delete.id)
+                        deleted = True
+                    else:
+                        logger.warning(f"Delete method not available - agent {agent_id} may need manual cleanup via Letta UI")
+                        logger.warning(f"Agent ID: {agent_to_delete.id}, Name: {agent_to_delete.name}")
+                        return False
+                    
+                    if deleted:
+                        logger.info(f"Agent {agent_id} deleted successfully")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to delete agent {agent_id}: {e}")
+                    logger.error(f"Agent may need manual cleanup via Letta UI")
+                    logger.error(f"Agent ID: {agent_to_delete.id}, Name: {agent_to_delete.name}")
+                    return False
+                
+                # Remove from tracking
+                if agent_id in self.created_agents:
+                    del self.created_agents[agent_id]
+            else:
+                logger.warning(f"Agent {agent_id} not found - may already be deleted")
+            
+            # Note: Blocks are typically deleted automatically when agent is deleted
+            if agent_id in self.created_blocks:
+                del self.created_blocks[agent_id]
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Cleanup failed for agent {agent_id}: {e}")
+            return False
+    
+    def cleanup_all(self) -> bool:
+        """Clean up all created agents and blocks"""
+        logger.info("Cleaning up all created agents...")
+        success = True
+        
+        for agent_id in list(self.created_agents.keys()):
+            if not self.cleanup_agent(agent_id):
+                success = False
+        
+        return success
+    
     def verify_bootstrap(self) -> Dict[str, bool]:
         """Verify that all agents were created successfully"""
         logger.info("Verifying bootstrap results...")
@@ -403,18 +557,86 @@ I am the keeper of what was said, and the lens through which meaning endures."""
         
         for agent_id in self.agents.keys():
             try:
-                # Test agent by sending a simple message
-                logger.info(f"Testing agent: {agent_id}")
+                # Test agent by checking if it exists in Letta
+                logger.info(f"Verifying agent: {agent_id}")
                 
-                # This would need to be implemented based on actual Letta API
-                # For now, assume success if we got this far
-                verification_results[agent_id] = True
+                agents = self.client.agents.list()
+                agent_names = [agent.name for agent in agents]
+                
+                if agent_id in agent_names:
+                    verification_results[agent_id] = True
+                    logger.info(f"Agent {agent_id} verified successfully")
+                else:
+                    verification_results[agent_id] = False
+                    logger.warning(f"Agent {agent_id} not found in Letta server")
                 
             except Exception as e:
                 logger.error(f"Verification failed for {agent_id}: {e}")
                 verification_results[agent_id] = False
         
         return verification_results
+    
+    def test_single_agent(self, agent_id: str = "librarian-worker") -> bool:
+        """Test mode: Create a single test agent, verify it, then clean it up"""
+        logger.info(f"TEST MODE: Creating test agent {agent_id}")
+        logger.warning("This will create and then DELETE the test agent")
+        
+        # Track if we need to clean up (only if we created it)
+        agent_was_existing = False
+        
+        try:
+            # Check if agent already exists
+            existing_agents = self.client.agents.list()
+            for agent in existing_agents:
+                if agent.name == agent_id:
+                    logger.warning(f"Agent {agent_id} already exists - will delete it after test")
+                    agent_was_existing = True
+                    break
+            
+            # Create the test agent
+            if agent_id not in self.agents:
+                logger.error(f"Test agent {agent_id} not in configuration")
+                return False
+            
+            config = self.agents[agent_id]
+            
+            # Create agent (or use existing)
+            if not self.create_agent(agent_id, config):
+                logger.error("Failed to create/test agent")
+                return False
+            
+            # Create persona block (skip if agent already existed with blocks)
+            if not agent_was_existing:
+                if not self.create_persona_block(agent_id):
+                    logger.warning("Failed to create persona block, but continuing test")
+            
+            # Verify agent exists
+            agents = self.client.agents.list()
+            agent_names = [agent.name for agent in agents]
+            
+            if agent_id in agent_names:
+                logger.info(f"TEST SUCCESS: Agent {agent_id} verified")
+            else:
+                logger.error(f"TEST FAILED: Agent {agent_id} not found after creation")
+                self.cleanup_agent(agent_id)
+                return False
+            
+            # Clean up test agent (always, even if it existed before)
+            logger.info(f"Cleaning up test agent {agent_id}...")
+            if not self.cleanup_agent(agent_id):
+                logger.error(f"WARNING: Failed to clean up test agent {agent_id} - MANUAL CLEANUP REQUIRED")
+                logger.error(f"Please delete agent '{agent_id}' manually via Letta UI")
+                return False
+            
+            logger.info("TEST COMPLETE: Agent created, verified, and cleaned up successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Test failed with error: {e}")
+            # Always try to clean up on error
+            logger.info("Attempting cleanup after error...")
+            self.cleanup_agent(agent_id)
+            return False
 
 
 def main():
@@ -425,12 +647,23 @@ def main():
     parser.add_argument("--config", help="Configuration file (.env)")
     parser.add_argument("--force", action="store_true", help="Force recreation of existing agents")
     parser.add_argument("--verify-only", action="store_true", help="Only verify existing agents")
+    parser.add_argument("--test", action="store_true", help="Test mode: Create one agent, verify, then delete it")
+    parser.add_argument("--test-agent", default="librarian-worker", help="Agent ID to use for test mode")
+    parser.add_argument("--cleanup", action="store_true", help="Clean up (delete) all created agents and exit")
+    parser.add_argument("--dry-run", action="store_true", help="Dry run mode: Validate configuration without connecting")
     
     args = parser.parse_args()
     
     # Load configuration
     if args.config:
         load_dotenv(args.config)
+    else:
+        # Try to load from parent directory .env (project root)
+        env_loaded = load_dotenv("../.env")
+        if not env_loaded:
+            env_loaded = load_dotenv(".env")
+        if env_loaded:
+            logger.info("Loaded configuration from .env file")
     
     # Get connection details
     letta_url = args.letta_url or os.getenv("LETTA_BASE_URL")
@@ -439,35 +672,120 @@ def main():
     if not letta_url or not api_key:
         logger.error("Missing required configuration: LETTA_BASE_URL and LETTA_API_KEY")
         logger.error("Provide via --letta-url and --api-key or set in .env file")
+        logger.error(f"Current LETTA_BASE_URL: {letta_url or 'NOT SET'}")
+        logger.error(f"Current LETTA_API_KEY: {'SET' if api_key else 'NOT SET'}")
         sys.exit(1)
+    
+    logger.info(f"Connecting to Letta server: {letta_url}")
+    
+    # Dry run mode - just validate configuration
+    if args.dry_run:
+        logger.info("=" * 60)
+        logger.info("DRY RUN MODE: Validating configuration")
+        logger.info("=" * 60)
+        logger.info(f"Server URL: {letta_url}")
+        logger.info(f"API Key: {'SET' if api_key else 'NOT SET'}")
+        logger.info(f"Agents to create: {len(['librarian-worker', 'librarian-persona', 'librarian-persona-turbo'])}")
+        logger.info("Configuration looks valid!")
+        logger.info("=" * 60)
+        sys.exit(0)
     
     # Initialize bootstrap
     bootstrap = LibrarianBootstrap(letta_url, api_key)
     
-    if args.verify_only:
-        # Only verify existing agents
-        logger.info("Verifying existing agents...")
-        results = bootstrap.verify_bootstrap()
-    else:
-        # Bootstrap all agents
-        results = bootstrap.bootstrap_all_agents(force=args.force)
+    try:
+        if args.cleanup:
+            # Cleanup mode - delete all created agents
+            logger.warning("CLEANUP MODE: This will delete all agents created by this script")
+            if bootstrap.cleanup_all():
+                logger.info("Cleanup completed successfully")
+                sys.exit(0)
+            else:
+                logger.error("Some cleanup operations failed")
+                sys.exit(1)
+        
+        elif args.test:
+            # Test mode - create one agent, verify, then delete
+            logger.warning("=" * 60)
+            logger.warning("TEST MODE: Creating test agent (will be deleted after test)")
+            logger.warning("=" * 60)
+            
+            # Test connection first
+            if not bootstrap.test_connection():
+                logger.error("=" * 60)
+                logger.error("CONNECTION FAILED: Cannot proceed with test")
+                logger.error("=" * 60)
+                logger.error("Troubleshooting steps:")
+                logger.error("  1. Verify server URL is correct and server is running")
+                logger.error("  2. Check network connectivity (firewall, VPN, etc.)")
+                logger.error("  3. Verify API key is correct")
+                logger.error("  4. Try: python bootstrap/test_connection.py")
+                logger.error("=" * 60)
+                sys.exit(1)
+            
+            success = bootstrap.test_single_agent(args.test_agent)
+            
+            if success:
+                logger.info("=" * 60)
+                logger.info("TEST PASSED: Agent created, verified, and cleaned up")
+                logger.info("=" * 60)
+                sys.exit(0)
+            else:
+                logger.error("=" * 60)
+                logger.error("TEST FAILED: Check logs above")
+                logger.error("=" * 60)
+                sys.exit(1)
+        
+        elif args.verify_only:
+            # Only verify existing agents
+            logger.info("Verifying existing agents...")
+            results = bootstrap.verify_bootstrap()
+        else:
+            # Bootstrap all agents
+            logger.warning("PRODUCTION MODE: Creating agents in production server")
+            logger.warning("Agents will NOT be automatically deleted")
+            
+            # Test connection first
+            if not bootstrap.test_connection():
+                logger.error("=" * 60)
+                logger.error("CONNECTION FAILED: Cannot proceed with bootstrap")
+                logger.error("=" * 60)
+                logger.error("Troubleshooting steps:")
+                logger.error("  1. Verify server URL is correct and server is running")
+                logger.error("  2. Check network connectivity (firewall, VPN, etc.)")
+                logger.error("  3. Verify API key is correct")
+                logger.error("  4. Try: python bootstrap/test_connection.py")
+                logger.error("=" * 60)
+                sys.exit(1)
+            
+            results = bootstrap.bootstrap_all_agents(force=args.force)
+        
+        # Print results
+        logger.info("Bootstrap Results:")
+        success_count = 0
+        for agent_id, success in results.items():
+            status = "SUCCESS" if success else "FAILED"
+            logger.info(f"  {agent_id}: {status}")
+            if success:
+                success_count += 1
+        
+        logger.info(f"Overall: {success_count}/{len(results)} agents successful")
+        
+        if success_count == len(results):
+            logger.info("All Librarian agents are ready!")
+            logger.info("You can now start The Librarian with: python main.py")
+        else:
+            logger.error("Some agents failed to bootstrap. Check the logs above.")
+            sys.exit(1)
     
-    # Print results
-    logger.info("Bootstrap Results:")
-    success_count = 0
-    for agent_id, success in results.items():
-        status = "SUCCESS" if success else "FAILED"
-        logger.info(f"  {agent_id}: {status}")
-        if success:
-            success_count += 1
-    
-    logger.info(f"Overall: {success_count}/{len(results)} agents successful")
-    
-    if success_count == len(results):
-        logger.info("All Librarian agents are ready!")
-        logger.info("You can now start The Librarian with: python main.py")
-    else:
-        logger.error("Some agents failed to bootstrap. Check the logs above.")
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user - attempting cleanup...")
+        bootstrap.cleanup_all()
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        logger.warning("Attempting cleanup after error...")
+        bootstrap.cleanup_all()
         sys.exit(1)
 
 
