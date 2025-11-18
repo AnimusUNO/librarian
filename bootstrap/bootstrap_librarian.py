@@ -150,9 +150,13 @@ Do not expose internal thoughts or reasoning; send only the final message conten
 
 **Memory Editing**
 
-* Use `core_memory_append` or `core_memory_replace` to refine or expand your operational heuristics.
-* Use `archival_memory_insert` to store long-term insights, contextual summaries, or recurring patterns.
-* Retrieve context via `archival_memory_search` or `conversation_search` as needed to maintain continuity.
+* Use `core_memory_append` to append to the contents of core memory, refining your understanding of yourself or your duties.
+* Use `core_memory_replace` to refine or expand your operational heuristics.
+* Use `memory_insert` to insert text at a specific location in a memory block when precision is required.
+* Use `memory_rethink` to completely rewrite the contents of a memory block when large sweeping changes are needed — for condensing or reorganizing memory blocks, not for small precise edits.
+* Use `memory_finish_edits` when you are finished making edits and have integrated all new information into the memory blocks.
+* Use `archival_memory_insert` to store long-term insights, contextual summaries, or recurring patterns — phrase the memory contents such that they can be easily queried later.
+* Retrieve context via `archival_memory_search` using semantic embedding-based search with optional temporal filtering, or `conversation_search` using hybrid search across prior conversation history, as needed to maintain continuity.
 
 **Recall Memory**
 
@@ -210,6 +214,10 @@ Let every response, whether mechanical or reflective, preserve the record faithf
     def _get_persona_block(self) -> str:
         """Get the Librarian persona block content"""
         return """# **The Librarian — Persona Block**
+
+The persona block: Stores details about your current persona, guiding how you behave and respond. This helps you to maintain consistency and personality in your interactions.
+
+---
 
 # Identity
 
@@ -351,11 +359,24 @@ I am the keeper of what was said, and the lens through which meaning endures."""
                 embedding_dim=1536  # OpenAI text-embedding-3-small dimension
             )
             
+            # Base tools to attach (built-in tools, no installation needed)
+            # Note: send_message, memory_replace are already default
+            base_tools = [
+                "memory_rethink",
+                "memory_insert",
+                "core_memory_append",
+                "conversation_search",
+                "archival_memory_search",
+                "archival_memory_insert",
+                "memory_finish_edits"
+            ]
+            
             agent = self.client.agents.create(
                 name=agent_id,  # Use agent_id as the name (matches proxy expectations)
                 system=config["system_instruction"],  # Use 'system' parameter, not 'instructions'
                 llm_config=llm_config,
-                embedding_config=embedding_config
+                embedding_config=embedding_config,
+                include_base_tools=True  # Include base/core tools (memory_rethink, memory_insert, etc.)
             )
             
             self.created_agents[agent_id] = agent
@@ -365,6 +386,57 @@ I am the keeper of what was said, and the lens through which meaning endures."""
         except Exception as e:
             logger.error(f"Failed to create agent {agent_id}: {e}")
             return False
+    
+    def attach_base_tools(self, agent_id: str) -> bool:
+        """Attach base tools to agent by finding tool IDs and attaching them"""
+        try:
+            logger.info(f"Attaching base tools to agent: {agent_id}")
+            
+            if agent_id not in self.created_agents:
+                logger.warning(f"Agent {agent_id} not found - cannot attach tools")
+                return False
+            
+            agent = self.created_agents[agent_id]
+            
+            # Base tools to attach (these are built-in, no installation needed)
+            # Note: send_message, memory_replace are already default
+            base_tool_names = [
+                "memory_rethink",
+                "memory_insert", 
+                "core_memory_append",
+                "conversation_search",
+                "archival_memory_search",
+                "archival_memory_insert",
+                "memory_finish_edits"
+            ]
+            
+            # Get all available tools and find IDs by name
+            all_tools = self.client.tools.list()
+            tool_name_to_id = {tool.name: tool.id for tool in all_tools}
+            
+            # Attach tools to agent using their IDs
+            for tool_name in base_tool_names:
+                if tool_name in tool_name_to_id:
+                    tool_id = tool_name_to_id[tool_name]
+                    try:
+                        self.client.agents.tools.attach(
+                            agent_id=agent.id,
+                            tool_id=tool_id
+                        )
+                        logger.info(f"Attached tool: {tool_name} (ID: {tool_id})")
+                    except Exception as e:
+                        # Tool might already be attached
+                        logger.warning(f"Tool {tool_name} may already be attached: {e}")
+                else:
+                    logger.warning(f"Tool {tool_name} not found in available tools")
+            
+            logger.info(f"Base tools attachment completed for agent {agent_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to attach base tools for {agent_id}: {e}")
+            # Don't fail completely - tools might already be attached
+            return True  # Return True to not block bootstrap
     
     def create_persona_block(self, agent_id: str) -> bool:
         """Create persona block for agent"""
@@ -443,6 +515,10 @@ I am the keeper of what was said, and the lens through which meaning endures."""
             if not self.create_agent(agent_id, config):
                 results[agent_id] = False
                 continue
+            
+            # Attach base tools
+            if not self.attach_base_tools(agent_id):
+                logger.warning(f"Some tools may not have attached for {agent_id}, continuing...")
             
             # Create persona block
             if not self.create_persona_block(agent_id):
@@ -585,6 +661,10 @@ I am the keeper of what was said, and the lens through which meaning endures."""
             if not self.create_agent(agent_id, config):
                 logger.error("Failed to create/test agent")
                 return False
+            
+            # Attach base tools
+            if not self.attach_base_tools(agent_id):
+                logger.warning("Some tools may not have attached, but continuing test")
             
             # Create persona block (skip if agent already existed with blocks)
             if not agent_was_existing:
