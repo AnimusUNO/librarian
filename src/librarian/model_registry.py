@@ -21,22 +21,24 @@ class ModelRegistry:
     
     def _load_model_config(self) -> Dict[str, Dict[str, str]]:
         """Load model configuration from environment variables"""
-        # Default model mappings
+        # Default model mappings - all map to the same agent
+        # The agent decides which model to use internally via model selector
+        librarian_agent_id = os.getenv("LIBRARIAN_AGENT", "librarian")
         default_models = {
             "gpt-3.5-turbo": {
-                "agent_id": os.getenv("LIBRARIAN_WORKER_AGENT", "librarian-worker"),
-                "mode": "worker",
-                "description": "The Librarian in Worker Mode"
+                "agent_id": librarian_agent_id,
+                "mode": "auto",  # Agent decides Worker/Persona mode internally
+                "description": "The Librarian"
             },
             "gpt-4": {
-                "agent_id": os.getenv("LIBRARIAN_PERSONA_AGENT", "librarian-persona"), 
-                "mode": "persona",
-                "description": "The Librarian in Persona Mode"
+                "agent_id": librarian_agent_id,
+                "mode": "auto",  # Agent decides Worker/Persona mode internally
+                "description": "The Librarian"
             },
             "gpt-4-turbo": {
-                "agent_id": os.getenv("LIBRARIAN_PERSONA_TURBO_AGENT", "librarian-persona-turbo"),
-                "mode": "persona", 
-                "description": "The Librarian in Persona Mode (Turbo)"
+                "agent_id": librarian_agent_id,
+                "mode": "auto",  # Agent decides Worker/Persona mode internally
+                "description": "The Librarian"
             }
         }
         

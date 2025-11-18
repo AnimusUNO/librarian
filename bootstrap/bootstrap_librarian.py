@@ -52,33 +52,14 @@ class LibrarianBootstrap:
         self.created_agents = {}  # agent_id -> agent_object
         self.created_blocks = {}  # agent_id -> block_id
         
-        # Agent configurations
+        # Agent configuration - ONE agent that handles all model names
         self.agents = {
-            "librarian-worker": {
-                "name": "The Librarian (Worker)",
-                "description": "The Librarian in Worker Mode - procedural, technical tasks",
-                "mode": "worker",
-                "system_instruction": self._get_worker_system_instruction()
-            },
-            "librarian-persona": {
-                "name": "The Librarian (Persona)",
-                "description": "The Librarian in Persona Mode - expressive, interpretive responses",
-                "mode": "persona", 
-                "system_instruction": self._get_persona_system_instruction()
-            },
-            "librarian-persona-turbo": {
-                "name": "The Librarian (Persona Turbo)",
-                "description": "The Librarian in Persona Mode - high-performance expressive responses",
-                "mode": "persona",
-                "system_instruction": self._get_persona_system_instruction()
+            "librarian": {
+                "name": "The Librarian",
+                "description": "The Librarian - Sanctum's archivist and persistent intelligence",
+                "system_instruction": self._get_persona_system_instruction()  # Uses canonical system instructions
             }
         }
-    
-    def _get_worker_system_instruction(self) -> str:
-        """Get system instruction for Worker Mode - uses same canonical instructions"""
-        # Worker and Persona use the same system instructions
-        # The mode selection happens in the reasoning block
-        return self._get_persona_system_instruction()
     
     def _get_persona_system_instruction(self) -> str:
         """Get system instruction for Persona Mode"""
@@ -394,7 +375,7 @@ I am the keeper of what was said, and the lens through which meaning endures."""
             
             # Create persona block
             block = self.client.blocks.create(
-                label="LibrarianPersona",
+                label="persona",
                 value=persona_content,  # Value is the content string directly
                 read_only=True  # Lock the block so agents can't modify it
             )
@@ -648,7 +629,7 @@ def main():
     parser.add_argument("--force", action="store_true", help="Force recreation of existing agents")
     parser.add_argument("--verify-only", action="store_true", help="Only verify existing agents")
     parser.add_argument("--test", action="store_true", help="Test mode: Create one agent, verify, then delete it")
-    parser.add_argument("--test-agent", default="librarian-worker", help="Agent ID to use for test mode")
+    parser.add_argument("--test-agent", default="librarian", help="Agent ID to use for test mode")
     parser.add_argument("--cleanup", action="store_true", help="Clean up (delete) all created agents and exit")
     parser.add_argument("--dry-run", action="store_true", help="Dry run mode: Validate configuration without connecting")
     
