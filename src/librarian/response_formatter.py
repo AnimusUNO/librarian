@@ -79,34 +79,73 @@ class ResponseFormatter:
             "data": model_list
         }
     
-    def _extract_content(self, response: Dict[str, Any]) -> str:
+    def _extract_content(self, response: Any) -> str:
         """
         Extract content from Letta response, filtering out reasoning blocks
         
         Args:
-            response: Letta response object
+            response: Letta response object (dict or object)
             
         Returns:
             Cleaned content string
         """
-        if isinstance(response, dict):
+        # Handle both dict and object responses
+        response_dict = response
+        if not isinstance(response, dict):
+            # Convert object to dict if possible
+            if hasattr(response, 'model_dump'):
+                response_dict = response.model_dump()
+            elif hasattr(response, '__dict__'):
+                response_dict = response.__dict__
+            else:
+                # Try to access as attributes
+                response_dict = {}
+                for attr in ['content', 'message', 'text', 'message_type', 'stop_reason', 'error']:
+                    if hasattr(response, attr):
+                        try:
+                            value = getattr(response, attr)
+                            if value is not None:  # Only add non-None values
+                                response_dict[attr] = value
+                        except:
+                            pass
+        
+        # Skip error and stop_reason events
+        if isinstance(response_dict, dict):
+            if response_dict.get("message_type") in ["error", "stop_reason"]:
+                return ""
+            
             # Filter out reasoning blocks - middleware removes reasoning output
-            if "reasoning" in response:
+            if "reasoning" in response_dict:
                 logger.debug("Filtering out reasoning block from response")
                 # Remove reasoning block but keep other content
                 pass
             
-            if "content" in response:
-                if isinstance(response["content"], list) and response["content"]:
-                    return response["content"][0].get("text", "")
-                elif isinstance(response["content"], str):
-                    return response["content"]
-            elif "message" in response and "content" in response["message"]:
-                return response["message"]["content"]
-            elif "text" in response:
-                return response["text"]
+            if "content" in response_dict:
+                content = response_dict["content"]
+                if isinstance(content, list) and content:
+                    # Handle list of content items (TextContent objects or dicts)
+                    text_parts = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            text_parts.append(item.get("text", ""))
+                        elif hasattr(item, 'text'):
+                            # TextContent object
+                            text_parts.append(item.text)
+                        else:
+                            text_parts.append(str(item))
+                    return "".join(text_parts)
+                elif isinstance(content, str):
+                    return content
+            elif "message" in response_dict and "content" in response_dict["message"]:
+                return response_dict["message"]["content"]
+            elif "text" in response_dict:
+                return response_dict["text"]
         
-        return str(response)
+        # If it's a string or has string representation, return that
+        if isinstance(response, str):
+            return response
+        
+        return ""
     
     def _extract_usage(self, response: Dict[str, Any]) -> Dict[str, int]:
         """Extract usage information from Letta response"""

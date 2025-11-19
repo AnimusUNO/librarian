@@ -6,7 +6,7 @@ Handles dynamic synchronization of OpenAI tools with Letta tools API.
 
 import logging
 from typing import List, Dict, Any, Optional
-from letta_client import Letta
+from letta_client import AsyncLetta
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class ToolSynchronizer:
     """Synchronizes OpenAI tool definitions with Letta tools"""
     
-    def __init__(self, letta_client: Letta):
+    def __init__(self, letta_client: AsyncLetta):
         self.letta_client = letta_client
         self.synced_tools = {}  # Cache of synced tools
     
@@ -47,7 +47,7 @@ class ToolSynchronizer:
         
         try:
             # Check if tool already exists
-            existing_tools = self.letta_client.tools.list()
+            existing_tools = await self.letta_client.tools.list()
             tool_exists = any(tool.name == tool_name for tool in existing_tools)
             
             if not tool_exists:
