@@ -55,9 +55,30 @@ class TokenCounter:
         
         return total_tokens
     
-    def calculate_usage(self, messages: List[Dict[str, str]], response_content: str, model: str = "gpt-4") -> Dict[str, int]:
-        """Calculate usage statistics for a request/response pair"""
-        prompt_tokens = self.count_messages_tokens(messages, model)
+    def calculate_usage(self, messages: List[Dict[str, str]], response_content: str, model: str = "gpt-4", system_content: Optional[str] = None) -> Dict[str, int]:
+        """
+        Calculate usage statistics for a request/response pair
+        
+        Args:
+            messages: List of OpenAI message objects
+            response_content: Response content string
+            model: Model name for token counting
+            system_content: Optional system content (includes [API] indicator and mode instructions)
+                           This will be counted as a system message if provided
+        """
+        # Build complete message list for token counting
+        messages_for_counting = []
+        
+        # Add system content as a system message if provided (includes [API] and mode instructions)
+        if system_content:
+            messages_for_counting.append({"role": "system", "content": system_content})
+        
+        # Add all non-system messages (system messages are already in system_content)
+        for msg in messages:
+            if msg.get("role") != "system":  # System messages are already counted in system_content
+                messages_for_counting.append(msg)
+        
+        prompt_tokens = self.count_messages_tokens(messages_for_counting, model)
         completion_tokens = self.count_tokens(response_content, model)
         
         return {

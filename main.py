@@ -318,8 +318,8 @@ async def handle_non_streaming_response(
                 
                 # If we got here and have content, request succeeded
                 if response_content or attempt == max_retries - 1:
-                    # Calculate token usage
-                    usage = token_counter.calculate_usage(openai_messages, response_content, model_name)
+                    # Calculate token usage (include system_content with [API] indicator)
+                    usage = token_counter.calculate_usage(openai_messages, response_content, model_name, system_content=system_content)
                     
                     # Format response
                     response = ChatCompletionResponse(
@@ -395,7 +395,7 @@ async def handle_non_streaming_response(
                         status_code=500,
                         detail={"error": {"message": f"Failed to generate response: {str(e)}", "type": "server_error"}}
                     )
-        
+
         # If we get here, all retries failed
         if original_config is not None:
             await restore_agent_config(agent_id, original_config)
@@ -447,7 +447,7 @@ async def handle_streaming_response_with_queue(
             # Yield from the actual stream
             async for chunk in _generate_stream_chunks(
                 agent_id, message_objects, model_name, 
-                openai_messages, max_tokens, temperature
+                openai_messages, system_content, max_tokens, temperature
             ):
                 yield chunk
         finally:
@@ -473,6 +473,7 @@ async def _generate_stream_chunks(
     message_objects: list,
     model_name: str,
     openai_messages: list,
+    system_content: Optional[str] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     retry_on_context_full: bool = True
@@ -650,8 +651,8 @@ async def _generate_stream_chunks(
                     # Stream completed successfully
                     logger.debug(f"Stream completed: {chunk_count} chunks processed, {len(full_content)} chars of content")
                     
-                    # Send final chunk with usage
-                    usage = token_counter.calculate_usage(openai_messages, full_content, model_name)
+                    # Send final chunk with usage (include system_content with [API] indicator)
+                    usage = token_counter.calculate_usage(openai_messages, full_content, model_name, system_content=system_content)
                     final_chunk = {
                         "id": response_id,
                         "object": "chat.completion.chunk",
@@ -952,8 +953,8 @@ async def handle_streaming_response(
                 yield "data: [DONE]\n\n"
                 return
             
-            # Send final chunk with usage
-            usage = token_counter.calculate_usage(openai_messages, full_content, model_name)
+            # Send final chunk with usage (include system_content with [API] indicator)
+            usage = token_counter.calculate_usage(openai_messages, full_content, model_name, system_content=system_content)
             final_chunk = {
                 "id": response_id,
                 "object": "chat.completion.chunk",
@@ -1150,9 +1151,32 @@ async def chat_completions(request: ChatCompletionRequest):
         agent_id = agent_config['agent_id']
         logger.info(f"Processing request for model {request.model} -> agent {agent_id}")
         
-        # Estimate request tokens before processing
+        # Convert messages to Letta format first to extract system content
         openai_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
-        estimated_prompt_tokens = token_counter.count_messages_tokens(openai_messages, request.model)
+        letta_messages, system_content = message_translator.translate_messages(openai_messages)
+        
+        # Add API call indicator - all requests via /v1/chat/completions are API calls
+        api_indicator = "[API]"
+        
+        # Add mode selection instruction to system content
+        mode_instruction = message_translator.create_mode_selection_instruction(agent_config['mode'])
+        if system_content:
+            system_content = f"{api_indicator}\n\n{system_content}\n\n{mode_instruction}"
+        else:
+            system_content = f"{api_indicator}\n\n{mode_instruction}"
+        
+        # Estimate request tokens including [API] indicator and mode instruction
+        # Create a complete message list that includes the system content for accurate token counting
+        messages_for_counting = []
+        if system_content:
+            # Add system content as a system message for token counting
+            messages_for_counting.append({"role": "system", "content": system_content})
+        # Add all non-system messages
+        for msg in openai_messages:
+            if msg["role"] != "system":  # System messages are already in system_content
+                messages_for_counting.append(msg)
+        
+        estimated_prompt_tokens = token_counter.count_messages_tokens(messages_for_counting, request.model)
         
         # Check token capacity (only errors if max_tokens exceeds model's absolute maximum)
         is_valid, error_message, capacity_info = await check_token_capacity(
@@ -1171,17 +1195,6 @@ async def chat_completions(request: ChatCompletionRequest):
                     }
                 }
             )
-        
-        # Convert messages to Letta format
-        openai_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
-        letta_messages, system_content = message_translator.translate_messages(openai_messages)
-        
-        # Add mode selection instruction to system content
-        mode_instruction = message_translator.create_mode_selection_instruction(agent_config['mode'])
-        if system_content:
-            system_content = f"{system_content}\n\n{mode_instruction}"
-        else:
-            system_content = mode_instruction
         
         # Sync tools if provided
         if request.tools:
