@@ -9,7 +9,7 @@ import asyncio
 import logging
 import time
 import os
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Callable, Awaitable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -53,6 +53,9 @@ class LoadManager:
         self.active_requests: Dict[str, RequestItem] = {}
         self.agent_clones: Dict[str, List[str]] = {}  # agent_id -> list of clone_ids
         self.request_lock = asyncio.Lock()
+        
+        # Semaphore for concurrency control
+        self.processing_semaphore = asyncio.Semaphore(self.max_concurrent)
         
         logger.info(f"LoadManager initialized: max_concurrent={self.max_concurrent}, "
                    f"duplication_threshold={self.duplication_threshold}, "
@@ -131,16 +134,24 @@ class LoadManager:
         except Exception as e:
             logger.error(f"Error spawning agent clone: {str(e)}")
     
-    async def process_request(self, request_id: str) -> Optional[Any]:
+    async def process_request(
+        self, 
+        request_id: str, 
+        processor: Callable[[], Awaitable[Any]]
+    ) -> Optional[Any]:
         """
-        Process a queued request
+        Process a queued request with concurrency control
         
         Args:
             request_id: Request ID to process
+            processor: Async callable that performs the actual processing
             
         Returns:
-            Request result or None if not found
+            Request result or None if not found/failed
         """
+        # Acquire semaphore (waits if at max_concurrent)
+        await self.processing_semaphore.acquire()
+        
         async with self.request_lock:
             # Find the request
             request_item = None
@@ -151,6 +162,7 @@ class LoadManager:
             
             if not request_item:
                 logger.error(f"Request {request_id} not found in queue")
+                self.processing_semaphore.release()
                 return None
             
             # Move to active processing
@@ -159,17 +171,18 @@ class LoadManager:
             self.request_queue.remove(request_item)
         
         try:
-            # Process the request (this would call the actual Letta agent)
-            # For now, we'll simulate processing
-            await asyncio.sleep(0.1)  # Simulate processing time
+            logger.info(f"Processing request {request_id} (active: {len(self.active_requests)})")
+            
+            # Call the actual processor function
+            result = await processor()
             
             # Mark as completed
             request_item.status = RequestStatus.COMPLETED
-            request_item.result = {"status": "processed", "request_id": request_id}
+            request_item.result = result
             
             logger.info(f"Completed processing request {request_id}")
             
-            return request_item.result
+            return result
             
         except Exception as e:
             # Mark as failed
@@ -177,13 +190,40 @@ class LoadManager:
             request_item.error = str(e)
             
             logger.error(f"Error processing request {request_id}: {str(e)}")
-            return None
+            raise  # Re-raise to let caller handle
             
         finally:
-            # Remove from active requests
+            # Remove from active requests and release semaphore
             async with self.request_lock:
                 if request_id in self.active_requests:
                     del self.active_requests[request_id]
+            self.processing_semaphore.release()
+    
+    async def process_with_queue(
+        self,
+        agent_id: str,
+        messages: List[Dict[str, Any]],
+        processor: Callable[[], Awaitable[Any]],
+        user_id: Optional[str] = None
+    ) -> Any:
+        """
+        Queue a request and process it with concurrency control.
+        This is the main entry point for request processing.
+        
+        Args:
+            agent_id: Target agent ID
+            messages: Message list
+            processor: Async callable that performs the actual processing
+            user_id: Optional user ID
+            
+        Returns:
+            Result from processor
+        """
+        # Queue the request
+        request_id = await self.queue_request(agent_id, messages, user_id)
+        
+        # Process it (will wait for semaphore if needed)
+        return await self.process_request(request_id, processor)
     
     async def get_request_status(self, request_id: str) -> Optional[Dict[str, Any]]:
         """Get the status of a request"""

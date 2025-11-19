@@ -24,11 +24,12 @@ from dotenv import load_dotenv
 from letta_client import AsyncLetta, MessageCreate, AssistantMessage
 from letta_client.types import TextContent
 from letta_client.core.api_error import ApiError
+from letta_client import LlmConfig
 
 # Import Librarian components
 from src.librarian import ModelRegistry, MessageTranslator, ResponseFormatter, TokenCounter
 from src.librarian.tool_synchronizer import ToolSynchronizer
-from src.librarian.load_manager import LoadManager
+from src.librarian.load_manager import LoadManager, RequestStatus
 
 # Load environment variables
 load_dotenv()
@@ -173,76 +174,485 @@ async def handle_non_streaming_response(
     system_content: Optional[str],
     user_id: Optional[str],
     max_tokens: Optional[int] = None,
-    temperature: Optional[float] = None
+    temperature: Optional[float] = None,
+    retry_on_context_full: bool = True
 ) -> ChatCompletionResponse:
-    """Handle non-streaming chat completion"""
-    try:
-        # Use create_stream() and collect chunks
-        # Note: create() fails with this agent due to model_endpoint=None in agent config
-        # Streaming works, so we use it for both streaming and non-streaming
-        stream_kwargs = {
-            "agent_id": agent_id,
-            "messages": message_objects,
-            "stream_tokens": True
-        }
-        # Pass through max_tokens and temperature if provided
-        if max_tokens is not None:
-            stream_kwargs["max_tokens"] = max_tokens
-        if temperature is not None:
-            stream_kwargs["temperature"] = temperature
-        
-        stream = letta_client.agents.messages.create_stream(**stream_kwargs)
-        
-        # Collect all chunks from stream
-        response_content = ""
-        async for chunk in stream:
-            # Skip error and stop_reason events
-            if hasattr(chunk, 'message_type'):
-                msg_type = chunk.message_type
-                if msg_type == 'error':
-                    error_msg = getattr(chunk, 'error', 'Unknown error')
-                    logger.error(f"Error in Letta stream: {error_msg}")
+    """Handle non-streaming chat completion with automatic retry on context window full"""
+    max_retries = 2  # Try original request + 1 retry after summarization
+    
+    for attempt in range(max_retries):
+        try:
+            # Use create_stream() and collect chunks
+            # Note: create() fails with this agent due to model_endpoint=None in agent config
+            # Streaming works, so we use it for both streaming and non-streaming
+            # Note: Letta's create_stream() only accepts agent_id and messages
+            # max_tokens and temperature are not supported in the streaming API
+            # These would need to be configured on the agent itself if needed
+            stream = letta_client.agents.messages.create_stream(
+                agent_id=agent_id,
+                messages=message_objects,
+                stream_tokens=True
+            )
+            
+            # Collect all chunks from stream
+            response_content = ""
+            async for chunk in stream:
+                # Skip error and stop_reason events
+                if hasattr(chunk, 'message_type'):
+                    msg_type = chunk.message_type
+                    if msg_type == 'error':
+                        error_msg = getattr(chunk, 'error', 'Unknown error')
+                        error_exception = Exception(error_msg)
+                        
+                        # Check if it's a context window full error
+                        if is_context_window_full_error(error_exception) and retry_on_context_full and attempt < max_retries - 1:
+                            logger.warning(f"Context window full error detected, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                            if await summarize_agent_conversation(agent_id, max_message_length=10):
+                                # Retry the request after summarization
+                                break  # Break out of chunk loop, will retry outer loop
+                            else:
+                                # Summarization failed, raise error
+                                raise HTTPException(
+                                    status_code=500,
+                                    detail={"error": {"message": f"Letta agent error: {error_msg}", "type": "server_error"}}
+                                )
+                        else:
+                            # Not a context window error or no retries left
+                            logger.error(f"Error in Letta stream: {error_msg}")
+                            raise HTTPException(
+                                status_code=500,
+                                detail={"error": {"message": f"Letta agent error: {error_msg}", "type": "server_error"}}
+                            )
+                    elif msg_type == 'stop_reason':
+                        # Normal stop, break
+                        break
+                
+                # Extract content from chunk
+                chunk_content = response_formatter._extract_content(chunk)
+                if chunk_content:
+                    response_content += chunk_content
+            
+            # If we got here and have content, request succeeded
+            if response_content or attempt == max_retries - 1:
+                # Calculate token usage
+                usage = token_counter.calculate_usage(openai_messages, response_content, model_name)
+                
+                # Format response
+                return ChatCompletionResponse(
+                    id=f"chatcmpl-{uuid.uuid4().hex}",
+                    created=int(time.time()),
+                    model=model_name,
+                    choices=[{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": response_content
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    usage=usage
+                )
+            
+        except HTTPException:
+            # Re-raise HTTP exceptions (don't retry)
+            raise
+        except ApiError as api_error:
+            # Check if it's a context window full error
+            if is_context_window_full_error(api_error) and retry_on_context_full and attempt < max_retries - 1:
+                logger.warning(f"Context window full error from Letta API, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                if await summarize_agent_conversation(agent_id, max_message_length=10):
+                    # Retry the request after summarization
+                    continue
+                else:
+                    # Summarization failed, raise error
                     raise HTTPException(
                         status_code=500,
-                        detail={"error": {"message": f"Letta agent error: {error_msg}", "type": "server_error"}}
+                        detail={"error": {"message": f"Letta API error: {str(api_error)}", "type": "server_error"}}
                     )
-                elif msg_type == 'stop_reason':
-                    # Normal stop, break
+            else:
+                # Not a context window error or no retries left
+                logger.error(f"Letta API error: {str(api_error)}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": {"message": f"Letta API error: {str(api_error)}", "type": "server_error"}}
+                )
+        except Exception as e:
+            # Check if it's a context window full error
+            if is_context_window_full_error(e) and retry_on_context_full and attempt < max_retries - 1:
+                logger.warning(f"Context window full error detected, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                if await summarize_agent_conversation(agent_id, max_message_length=10):
+                    # Retry the request after summarization
+                    continue
+                else:
+                    # Summarization failed, raise error
+                    logger.error(f"Error in non-streaming response: {str(e)}", exc_info=True)
+                    raise HTTPException(
+                        status_code=500,
+                        detail={"error": {"message": f"Failed to generate response: {str(e)}", "type": "server_error"}}
+                    )
+            else:
+                # Not a context window error or no retries left
+                logger.error(f"Error in non-streaming response: {str(e)}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": {"message": f"Failed to generate response: {str(e)}", "type": "server_error"}}
+                )
+    
+    # If we get here, all retries failed
+    raise HTTPException(
+        status_code=500,
+        detail={"error": {"message": "Failed to generate response after retries", "type": "server_error"}}
+    )
+
+async def handle_streaming_response_with_queue(
+    load_manager: LoadManager,
+    agent_id: str,
+    message_objects: list,
+    model_name: str,
+    openai_messages: list,
+    system_content: Optional[str],
+    user_id: Optional[str],
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None
+) -> StreamingResponse:
+    """Handle streaming chat completion with queueing"""
+    
+    # Queue the request
+    request_id = await load_manager.queue_request(agent_id, openai_messages, user_id)
+    
+    async def generate_stream():
+        # Acquire semaphore (waits if at max_concurrent)
+        await load_manager.processing_semaphore.acquire()
+        
+        # Mark as processing
+        async with load_manager.request_lock:
+            # Find and move request to active
+            request_item = None
+            for req in load_manager.request_queue:
+                if req.request_id == request_id:
+                    request_item = req
                     break
             
-            # Extract content from chunk
-            chunk_content = response_formatter._extract_content(chunk)
-            if chunk_content:
-                response_content += chunk_content
+            if request_item:
+                request_item.status = RequestStatus.PROCESSING
+                load_manager.active_requests[request_id] = request_item
+                load_manager.request_queue.remove(request_item)
         
-        # Calculate token usage
-        usage = token_counter.calculate_usage(openai_messages, response_content, model_name)
+        try:
+            # Yield from the actual stream
+            async for chunk in _generate_stream_chunks(
+                agent_id, message_objects, model_name, 
+                openai_messages, max_tokens, temperature
+            ):
+                yield chunk
+        finally:
+            # Mark as completed and release semaphore
+            async with load_manager.request_lock:
+                if request_id in load_manager.active_requests:
+                    req_item = load_manager.active_requests[request_id]
+                    req_item.status = RequestStatus.COMPLETED
+                    del load_manager.active_requests[request_id]
+            load_manager.processing_semaphore.release()
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+async def _generate_stream_chunks(
+    agent_id: str,
+    message_objects: list,
+    model_name: str,
+    openai_messages: list,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    retry_on_context_full: bool = True
+) -> AsyncGenerator[str, None]:
+    """Generate stream chunks from Letta (internal helper) with retry on context window full"""
+    max_retries = 2  # Try original request + 1 retry after summarization
+    
+    for attempt in range(max_retries):
+        try:
+            # Note: Letta's create_stream() only accepts agent_id and messages
+            stream = letta_client.agents.messages.create_stream(
+                agent_id=agent_id,
+                messages=message_objects,
+                stream_tokens=True
+            )
+            
+            response_id = f"chatcmpl-{uuid.uuid4().hex}"
+            full_content = ""
+            chunk_count = 0
+            should_retry = False
+            
+            try:
+                async for chunk in stream:
+                    chunk_count += 1
+                    logger.debug(f"Stream chunk {chunk_count}: type={type(chunk).__name__}")
+                    
+                    # Determine event type
+                    event_type = None
+                    if hasattr(chunk, 'message_type') and isinstance(chunk.message_type, str):
+                        event_type = chunk.message_type
+                    elif hasattr(chunk, 'tool_call'):
+                        event_type = 'tool_call_message'
+                    elif hasattr(chunk, 'content'):
+                        event_type = 'assistant_message'
+                    
+                    logger.debug(f"  Final event_type: {event_type}")
+                    
+                    # Handle different event types
+                    if event_type == 'error':
+                        error_msg = getattr(chunk, 'error', 'Unknown error')
+                        error_exception = Exception(error_msg)
+                        
+                        # Check if it's a context window full error
+                        if is_context_window_full_error(error_exception) and retry_on_context_full and attempt < max_retries - 1:
+                            logger.warning(f"Context window full error in stream, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                            if await summarize_agent_conversation(agent_id, max_message_length=10):
+                                # Will retry outer loop
+                                should_retry = True
+                                break
+                            else:
+                                # Summarization failed, yield error
+                                error_chunk = {
+                                    "error": {
+                                        "message": f"Letta agent error: {error_msg}",
+                                        "type": "server_error"
+                                    }
+                                }
+                                yield f"data: {json.dumps(error_chunk)}\n\n"
+                                yield "data: [DONE]\n\n"
+                                return
+                        else:
+                            # Not a context window error or no retries left
+                            logger.error(f"Error in Letta stream: {error_msg}")
+                            error_chunk = {
+                                "error": {
+                                    "message": f"Letta agent error: {error_msg}",
+                                    "type": "server_error"
+                                }
+                            }
+                            yield f"data: {json.dumps(error_chunk)}\n\n"
+                            yield "data: [DONE]\n\n"
+                            return
+                    elif event_type == 'stop_reason':
+                        stop_reason = getattr(chunk, 'stop_reason', None)
+                        if stop_reason == 'error':
+                            error_msg = getattr(chunk, 'error', 'Unknown error')
+                            error_exception = Exception(error_msg)
+                            
+                            # Check if it's a context window full error
+                            if is_context_window_full_error(error_exception) and retry_on_context_full and attempt < max_retries - 1:
+                                logger.warning(f"Context window full error in stream stop_reason, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                                if await summarize_agent_conversation(agent_id, max_message_length=10):
+                                    # Will retry outer loop
+                                    should_retry = True
+                                    break
+                                else:
+                                    # Summarization failed, yield error
+                                    error_chunk = {
+                                        "error": {
+                                            "message": f"Letta agent error: {error_msg}",
+                                            "type": "server_error"
+                                        }
+                                    }
+                                    yield f"data: {json.dumps(error_chunk)}\n\n"
+                                    yield "data: [DONE]\n\n"
+                                    return
+                            else:
+                                # Not a context window error or no retries left
+                                logger.error(f"Stop reason error: {error_msg}")
+                                error_chunk = {
+                                    "error": {
+                                        "message": f"Letta agent error: {error_msg}",
+                                        "type": "server_error"
+                                    }
+                                }
+                                yield f"data: {json.dumps(error_chunk)}\n\n"
+                                yield "data: [DONE]\n\n"
+                                return
+                        break
+                    elif event_type == 'assistant_message':
+                        content = getattr(chunk, 'content', '') or ""
+                        chunk_content = ""
+                        if isinstance(content, list):
+                            chunk_content = "".join(item.text for item in content if hasattr(item, 'text'))
+                        elif isinstance(content, str):
+                            chunk_content = content
+                        
+                        if chunk_content:
+                            full_content += chunk_content
+                            
+                            chunk_data = {
+                                "id": response_id,
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": model_name,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {
+                                        "content": chunk_content
+                                    },
+                                    "finish_reason": None
+                                }]
+                            }
+                            
+                            yield f"data: {json.dumps(chunk_data)}\n\n"
+                    elif event_type == 'reasoning_message':
+                        continue
+                    else:
+                        chunk_content = response_formatter._extract_content(chunk)
+                        if chunk_content:
+                            full_content += chunk_content
+                            
+                            chunk_data = {
+                                "id": response_id,
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": model_name,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {
+                                        "content": chunk_content
+                                    },
+                                    "finish_reason": None
+                                }]
+                            }
+                            
+                            yield f"data: {json.dumps(chunk_data)}\n\n"
+                
+                # If we should retry, break and continue outer loop
+                if should_retry:
+                    break
+                
+                # Stream completed successfully
+                logger.debug(f"Stream completed: {chunk_count} chunks processed, {len(full_content)} chars of content")
+                
+                # Send final chunk with usage
+                usage = token_counter.calculate_usage(openai_messages, full_content, model_name)
+                final_chunk = {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": usage
+                }
+                
+                yield f"data: {json.dumps(final_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                return  # Success, exit function
+                
+            except Exception as stream_error:
+                # Check if it's a context window full error
+                if is_context_window_full_error(stream_error) and retry_on_context_full and attempt < max_retries - 1:
+                    logger.warning(f"Context window full error in stream iteration, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                    if await summarize_agent_conversation(agent_id, max_message_length=10):
+                        # Will retry outer loop
+                        continue
+                    else:
+                        # Summarization failed, yield error
+                        logger.error(f"Error iterating stream: {type(stream_error).__name__}: {str(stream_error)}", exc_info=True)
+                        error_chunk = {
+                            "error": {
+                                "message": f"Stream iteration error: {str(stream_error)}",
+                                "type": "server_error"
+                            }
+                        }
+                        yield f"data: {json.dumps(error_chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+                else:
+                    # Not a context window error or no retries left
+                    logger.error(f"Error iterating stream: {type(stream_error).__name__}: {str(stream_error)}", exc_info=True)
+                    error_chunk = {
+                        "error": {
+                            "message": f"Stream iteration error: {str(stream_error)}",
+                            "type": "server_error"
+                        }
+                    }
+                    yield f"data: {json.dumps(error_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
         
-        # Format response
-        return ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex}",
-            created=int(time.time()),
-            model=model_name,
-            choices=[{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": response_content
-                },
-                "finish_reason": "stop"
-            }],
-            usage=usage
-        )
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
-    except Exception as e:
-        logger.error(f"Error in non-streaming response: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={"error": {"message": f"Failed to generate response: {str(e)}", "type": "server_error"}}
-        )
+        except ApiError as api_error:
+            # Check if it's a context window full error
+            if is_context_window_full_error(api_error) and retry_on_context_full and attempt < max_retries - 1:
+                logger.warning(f"Context window full error from Letta API in stream, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                if await summarize_agent_conversation(agent_id, max_message_length=10):
+                    # Will retry outer loop
+                    continue
+                else:
+                    # Summarization failed, yield error
+                    error_chunk = {
+                        "error": {
+                            "message": f"Letta API error: {str(api_error)}",
+                            "type": "server_error"
+                        }
+                    }
+                    yield f"data: {json.dumps(error_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+            else:
+                # Not a context window error or no retries left
+                logger.error(f"Letta API error in stream: {str(api_error)}", exc_info=True)
+                error_chunk = {
+                    "error": {
+                        "message": f"Letta API error: {str(api_error)}",
+                        "type": "server_error"
+                    }
+                }
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+        except Exception as e:
+            # Check if it's a context window full error
+            if is_context_window_full_error(e) and retry_on_context_full and attempt < max_retries - 1:
+                logger.warning(f"Context window full error in stream, summarizing and retrying (attempt {attempt + 1}/{max_retries})")
+                if await summarize_agent_conversation(agent_id, max_message_length=10):
+                    # Will retry outer loop
+                    continue
+                else:
+                    # Summarization failed, yield error
+                    logger.error(f"Error in streaming response: {str(e)}", exc_info=True)
+                    error_chunk = {
+                        "error": {
+                            "message": f"Streaming error: {str(e)}",
+                            "type": "server_error"
+                        }
+                    }
+                    yield f"data: {json.dumps(error_chunk)}\n\n"
+                    return
+            else:
+                # Not a context window error or no retries left
+                logger.error(f"Error in streaming response: {str(e)}", exc_info=True)
+                error_chunk = {
+                    "error": {
+                        "message": f"Streaming error: {str(e)}",
+                        "type": "server_error"
+                    }
+                }
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                return
+    
+    # If we get here, all retries failed
+    error_chunk = {
+        "error": {
+            "message": "Failed to generate stream after retries",
+            "type": "server_error"
+        }
+    }
+    yield f"data: {json.dumps(error_chunk)}\n\n"
+    yield "data: [DONE]\n\n"
 
 async def handle_streaming_response(
     agent_id: str,
@@ -254,7 +664,7 @@ async def handle_streaming_response(
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None
 ) -> StreamingResponse:
-    """Handle streaming chat completion"""
+    """Handle streaming chat completion (legacy, now uses queueing)"""
     
     async def generate_stream():
         try:
@@ -460,14 +870,64 @@ async def get_model(model_id: str):
         owned_by="librarian"
     )
 
+async def summarize_agent_conversation(agent_id: str, max_message_length: int = 10) -> bool:
+    """
+    Summarize agent's conversation history to free up context window.
+    
+    Args:
+        agent_id: Letta agent ID
+        max_message_length: Maximum number of messages to retain after summarization
+    
+    Returns:
+        True if summarization successful, False otherwise
+    """
+    try:
+        logger.info(f"Summarizing conversation for agent {agent_id}, keeping last {max_message_length} messages")
+        await letta_client.agents.summarize(
+            agent_id=agent_id,
+            max_message_length=max_message_length
+        )
+        logger.info(f"Successfully summarized conversation for agent {agent_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to summarize conversation for agent {agent_id}: {str(e)}")
+        return False
+
+def is_context_window_full_error(error: Exception) -> bool:
+    """
+    Check if an error indicates context window is full.
+    
+    Args:
+        error: Exception to check
+    
+    Returns:
+        True if error indicates context window full
+    """
+    error_str = str(error).lower()
+    error_msg = error_str
+    
+    # Check for common context window full indicators
+    context_full_indicators = [
+        "context window full",
+        "context window exceeded",
+        "context length exceeded",
+        "context overflow",
+        "token limit exceeded",
+        "context_window",
+        "context is full"
+    ]
+    
+    return any(indicator in error_msg for indicator in context_full_indicators)
+
 async def check_token_capacity(
     agent_id: str, 
     request_tokens: int, 
     requested_max_tokens: Optional[int] = None
 ) -> tuple[bool, Optional[str], Optional[Dict[str, int]]]:
     """
-    Check if request would exceed agent's token capacity.
-    Validates both prompt tokens and requested max_tokens against available capacity.
+    Check if request is valid based on current token usage and model limits.
+    Only errors if requested_max_tokens exceeds the model's absolute maximum capability.
+    For small requests, allows them even if they exceed current capacity (summarization will handle it).
     
     Args:
         agent_id: Letta agent ID
@@ -476,51 +936,48 @@ async def check_token_capacity(
     
     Returns:
         (is_valid, error_message, capacity_info) where:
-        - is_valid: True if request fits within capacity
+        - is_valid: True if request is valid (or will be handled by summarization)
         - error_message: Error message if invalid, None if valid
         - capacity_info: Dict with max_tokens, current_tokens, available_tokens, request_tokens
     """
     try:
+        # Get current context from Letta
         context = await letta_client.agents.context.retrieve(agent_id=agent_id)
         context_dict = context.model_dump()
         
-        max_context_window = context_dict.get('context_window_size_max', 0)
+        # Get current usage and max window size (model's absolute maximum)
         current_tokens = context_dict.get('context_window_size_current', 0)
-        available_tokens = max_context_window - current_tokens
+        max_context_window = context_dict.get('context_window_size_max', 0)  # Model's absolute max
         
         capacity_info = {
             'max_tokens': max_context_window,
             'current_tokens': current_tokens,
-            'available_tokens': available_tokens,
+            'available_tokens': max_context_window - current_tokens,
             'request_tokens': request_tokens
         }
         
-        # Check 1: Validate requested max_tokens doesn't exceed available capacity
+        # Only error if requested_max_tokens exceeds the model's absolute maximum capability
         if requested_max_tokens is not None:
-            max_allowed_completion = available_tokens - request_tokens
-            if requested_max_tokens > max_allowed_completion:
+            if requested_max_tokens > max_context_window:
                 error_msg = (
-                    f"Requested max_tokens ({requested_max_tokens:,}) exceeds available capacity. "
-                    f"Maximum allowed: {max_allowed_completion:,} tokens "
-                    f"(context window: {max_context_window:,} - current usage: {current_tokens:,} - prompt tokens: ~{request_tokens:,})."
+                    f"Requested max_tokens ({requested_max_tokens:,}) exceeds model's maximum capability "
+                    f"({max_context_window:,} tokens)."
                 )
                 return False, error_msg, capacity_info
         
-        # Check 2: Validate total request (prompt + completion) fits
-        # Use requested max_tokens if provided, otherwise estimate 100 tokens
+        # For small requests, calculate total needed but don't error - let summarization handle it
+        # Total needed = current usage + request tokens + completion tokens
         estimated_completion_tokens = requested_max_tokens if requested_max_tokens is not None else 100
-        total_needed = request_tokens + estimated_completion_tokens
+        total_needed = current_tokens + request_tokens + estimated_completion_tokens
         
-        if total_needed > available_tokens:
-            max_allowed_completion = max(0, available_tokens - request_tokens)
-            error_msg = (
-                f"Request would exceed token capacity. "
-                f"Available: {available_tokens:,} tokens, needed: ~{total_needed:,} tokens. "
-                f"Current usage: {current_tokens:,}/{max_context_window:,} tokens ({current_tokens/max_context_window*100:.1f}% used). "
-                f"Maximum completion tokens allowed: {max_allowed_completion:,}."
+        # Log if we're over capacity (but don't error - summarization will handle it)
+        if total_needed > max_context_window:
+            logger.info(
+                f"Request will exceed current capacity (needed: {total_needed:,}, max: {max_context_window:,}, "
+                f"current: {current_tokens:,}). Will attempt summarization if context window full error occurs."
             )
-            return False, error_msg, capacity_info
         
+        # Request is valid (either fits, or will be handled by summarization on error)
         return True, None, capacity_info
         
     except Exception as e:
@@ -549,7 +1006,7 @@ async def chat_completions(request: ChatCompletionRequest):
         openai_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         estimated_prompt_tokens = token_counter.count_messages_tokens(openai_messages, request.model)
         
-        # Check token capacity (validates both prompt tokens and requested max_tokens)
+        # Check token capacity (only errors if max_tokens exceeds model's absolute maximum)
         is_valid, error_message, capacity_info = await check_token_capacity(
             agent_id, 
             estimated_prompt_tokens,
@@ -560,7 +1017,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 status_code=400,
                 detail={
                     "error": {
-                        "message": error_message or "Request would exceed token capacity",
+                        "message": error_message or "Request exceeds model's maximum token capacity",
                         "type": "invalid_request_error",
                         "code": "context_length_exceeded"
                     }
@@ -605,20 +1062,31 @@ async def chat_completions(request: ChatCompletionRequest):
             
             message_objects.append(MessageCreate(**msg_kwargs))
         
-        # Handle streaming vs non-streaming
+        # Handle streaming vs non-streaming with queueing
         if request.stream:
-            return await handle_streaming_response(
+            # For streaming, we need to yield from generator, so handle queueing inline
+            return await handle_streaming_response_with_queue(
+                load_manager,
                 agent_id, message_objects, request.model, 
                 openai_messages, system_content, request.user,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature
             )
         else:
-            return await handle_non_streaming_response(
-                agent_id, message_objects, request.model,
-                openai_messages, system_content, request.user,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature
+            # For non-streaming, use queue processing
+            async def processor():
+                return await handle_non_streaming_response(
+                    agent_id, message_objects, request.model,
+                    openai_messages, system_content, request.user,
+                    max_tokens=request.max_tokens,
+                    temperature=request.temperature
+                )
+            
+            return await load_manager.process_with_queue(
+                agent_id,
+                openai_messages,
+                processor,
+                user_id=request.user
             )
             
     except HTTPException:
