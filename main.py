@@ -524,7 +524,7 @@ async def completions(request: Dict[str, Any]):
     # Convert legacy format to chat format
     if "prompt" in request:
         chat_request = ChatCompletionRequest(
-            model=request.get("model", "gpt-3.5-turbo"),
+            model=request.get("model", "gpt-4.1"),
             messages=[ChatMessage(role="user", content=request["prompt"])],
             temperature=request.get("temperature", 1.0),
             max_tokens=request.get("max_tokens"),

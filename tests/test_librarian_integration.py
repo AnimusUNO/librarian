@@ -9,6 +9,7 @@ import asyncio
 import json
 import httpx
 import os
+import pytest
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -22,6 +23,7 @@ ENABLE_STREAMING_TESTS = os.getenv("LIBRARIAN_ENABLE_STREAMING_TESTS", "true").l
 ENABLE_TOOL_TESTS = os.getenv("LIBRARIAN_ENABLE_TOOL_TESTS", "false").lower() == "true"
 VERBOSE_OUTPUT = os.getenv("LIBRARIAN_TEST_VERBOSE", "false").lower() == "true"
 
+@pytest.mark.asyncio
 async def test_health_check():
     """Test health check endpoint"""
     print("Testing health check...")
@@ -31,6 +33,7 @@ async def test_health_check():
         print(f"Response: {response.json()}")
         return response.status_code == 200
 
+@pytest.mark.asyncio
 async def test_models_endpoint():
     """Test models listing endpoint"""
     print("\nTesting models endpoint...")
@@ -42,6 +45,7 @@ async def test_models_endpoint():
             print(f"Available models: {[model['id'] for model in models['data']]}")
         return response.status_code == 200
 
+@pytest.mark.asyncio
 async def test_chat_completion(model: str = "gpt-3.5-turbo"):
     """Test chat completion endpoint"""
     print(f"\nTesting chat completion with model: {model}")
@@ -82,6 +86,7 @@ async def test_chat_completion(model: str = "gpt-3.5-turbo"):
             print(f"Error: {str(e)}")
             return False
 
+@pytest.mark.asyncio
 async def test_streaming_completion(model: str = "gpt-3.5-turbo"):
     """Test streaming chat completion"""
     if not ENABLE_STREAMING_TESTS:

@@ -46,7 +46,7 @@ class LibrarianBootstrap:
                 self.client._client_wrapper.httpx_client.timeout = timeout
         except Exception as e:
             logger.warning(f"Could not configure timeout on Letta client: {e}")
-            self.client = Letta(base_url=letta_url, token=api_key)
+        self.client = Letta(base_url=letta_url, token=api_key)
         
         # Track created agents/blocks for cleanup
         self.created_agents = {}  # agent_id -> agent_object
@@ -286,13 +286,13 @@ I am the keeper of what was said, and the lens through which meaning endures."""
     def test_connection(self, retries: int = 3) -> bool:
         """Test connection to Letta server with retry logic"""
         for attempt in range(1, retries + 1):
-            try:
+        try:
                 logger.info(f"Testing connection to Letta server: {self.letta_url} (attempt {attempt}/{retries})")
                 # Try to list agents as a connection test
                 agents = self.client.agents.list()
                 logger.info(f"Connection test successful - found {len(agents)} existing agents")
-                return True
-            except Exception as e:
+            return True
+        except Exception as e:
                 error_msg = str(e)
                 if attempt < retries:
                     wait_time = attempt * 2  # Exponential backoff: 2s, 4s, 6s
@@ -317,8 +317,8 @@ I am the keeper of what was said, and the lens through which meaning endures."""
                     logger.error(f"SSL/TLS certificate error")
                     logger.error(f"Error: {e}")
                 else:
-                    logger.error(f"Connection test failed: {e}")
-                return False
+            logger.error(f"Connection test failed: {e}")
+            return False
     
     def list_existing_agents(self) -> List[str]:
         """List existing agents in Letta server"""
@@ -479,7 +479,7 @@ I am the keeper of what was said, and the lens through which meaning endures."""
             # But we verify the agent exists and has instructions
             if agent_id in self.created_agents:
                 logger.info(f"System instructions verified for agent {agent_id} (set during creation)")
-                return True
+            return True
             else:
                 logger.warning(f"Agent {agent_id} not found - cannot verify system instructions")
                 return False
@@ -621,7 +621,7 @@ I am the keeper of what was said, and the lens through which meaning endures."""
                 agent_names = [agent.name for agent in agents]
                 
                 if agent_id in agent_names:
-                    verification_results[agent_id] = True
+                verification_results[agent_id] = True
                     logger.info(f"Agent {agent_id} verified successfully")
                 else:
                     verification_results[agent_id] = False
@@ -798,11 +798,11 @@ def main():
                 sys.exit(1)
         
         elif args.verify_only:
-            # Only verify existing agents
-            logger.info("Verifying existing agents...")
-            results = bootstrap.verify_bootstrap()
-        else:
-            # Bootstrap all agents
+        # Only verify existing agents
+        logger.info("Verifying existing agents...")
+        results = bootstrap.verify_bootstrap()
+    else:
+        # Bootstrap all agents
             logger.warning("PRODUCTION MODE: Creating agents in production server")
             logger.warning("Agents will NOT be automatically deleted")
             
@@ -819,24 +819,24 @@ def main():
                 logger.error("=" * 60)
                 sys.exit(1)
             
-            results = bootstrap.bootstrap_all_agents(force=args.force)
-        
-        # Print results
-        logger.info("Bootstrap Results:")
-        success_count = 0
-        for agent_id, success in results.items():
-            status = "SUCCESS" if success else "FAILED"
-            logger.info(f"  {agent_id}: {status}")
-            if success:
-                success_count += 1
-        
-        logger.info(f"Overall: {success_count}/{len(results)} agents successful")
-        
-        if success_count == len(results):
-            logger.info("All Librarian agents are ready!")
-            logger.info("You can now start The Librarian with: python main.py")
-        else:
-            logger.error("Some agents failed to bootstrap. Check the logs above.")
+        results = bootstrap.bootstrap_all_agents(force=args.force)
+    
+    # Print results
+    logger.info("Bootstrap Results:")
+    success_count = 0
+    for agent_id, success in results.items():
+        status = "SUCCESS" if success else "FAILED"
+        logger.info(f"  {agent_id}: {status}")
+        if success:
+            success_count += 1
+    
+    logger.info(f"Overall: {success_count}/{len(results)} agents successful")
+    
+    if success_count == len(results):
+        logger.info("All Librarian agents are ready!")
+        logger.info("You can now start The Librarian with: python main.py")
+    else:
+        logger.error("Some agents failed to bootstrap. Check the logs above.")
             sys.exit(1)
     
     except KeyboardInterrupt:

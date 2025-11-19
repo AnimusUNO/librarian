@@ -16,6 +16,7 @@ class TokenCounter:
         self.encodings = {
             "gpt-3.5-turbo": tiktoken.encoding_for_model("gpt-3.5-turbo"),
             "gpt-4": tiktoken.encoding_for_model("gpt-4"),
+            "gpt-4.1": tiktoken.encoding_for_model("gpt-4"),  # gpt-4.1 uses gpt-4 encoding
             "gpt-4-turbo": tiktoken.encoding_for_model("gpt-4"),
             "gpt-4o": tiktoken.encoding_for_model("gpt-4o"),
             "gpt-4o-mini": tiktoken.encoding_for_model("gpt-4o-mini"),
@@ -71,6 +72,7 @@ class TokenCounter:
         pricing = {
             "gpt-3.5-turbo": {"input": 0.0015, "output": 0.002},
             "gpt-4": {"input": 0.03, "output": 0.06},
+            "gpt-4.1": {"input": 0.01, "output": 0.03},  # Similar to gpt-4-turbo
             "gpt-4-turbo": {"input": 0.01, "output": 0.03},
             "gpt-4o": {"input": 0.005, "output": 0.015},
             "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
@@ -99,6 +101,7 @@ class TokenCounter:
         max_tokens = {
             "gpt-3.5-turbo": 4096,
             "gpt-4": 8192,
+            "gpt-4.1": 128000,  # gpt-4.1 has large context window
             "gpt-4-turbo": 128000,
             "gpt-4o": 128000,
             "gpt-4o-mini": 128000,

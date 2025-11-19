@@ -25,6 +25,11 @@ class ModelRegistry:
         # The agent decides which model to use internally via model selector
         librarian_agent_id = os.getenv("LIBRARIAN_AGENT", "librarian")
         default_models = {
+            "gpt-4.1": {
+                "agent_id": librarian_agent_id,
+                "mode": "auto",  # Agent decides Worker/Persona mode internally
+                "description": "The Librarian"
+            },
             "gpt-3.5-turbo": {
                 "agent_id": librarian_agent_id,
                 "mode": "auto",  # Agent decides Worker/Persona mode internally
