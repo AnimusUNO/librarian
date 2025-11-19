@@ -1,5 +1,6 @@
-
 # Letta API Reference
+
+**License**: [CC-BY-SA-4.0](../LICENSE-DOCS)
 
 ## Overview
 

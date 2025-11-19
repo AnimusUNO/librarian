@@ -1,5 +1,7 @@
 # The Librarian - Environment Configuration Reference
 
+**License**: [CC-BY-SA-4.0](../LICENSE-DOCS)
+
 This document provides a comprehensive reference for all environment configuration options available in The Librarian.
 
 ## Quick Start

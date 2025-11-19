@@ -1,5 +1,7 @@
 # Security Configuration for The Librarian
 
+**License**: [CC-BY-SA-4.0](../LICENSE-DOCS)
+
 Based on the security models and configuration options from `animusuno/smcp`, here are the security features and configurations that The Librarian should support:
 
 ## 🔒 Core Security Features

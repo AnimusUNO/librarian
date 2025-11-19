@@ -1,5 +1,7 @@
 # OpenAI ChatCompletion API vs Letta API Mapping
 
+**License**: [CC-BY-SA-4.0](../LICENSE-DOCS)
+
 ## OpenAI ChatCompletion Endpoints Analysis
 
 ### Core Endpoint

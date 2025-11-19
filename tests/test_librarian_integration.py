@@ -3,6 +3,21 @@
 Test script for The Librarian integration
 Tests the complete OpenAI-compatible API with Letta backend
 Fully configurable via environment variables
+
+Copyright (C) 2025 AnimusUNO
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import asyncio
@@ -104,7 +119,7 @@ async def test_chat_completion(model: str = "gpt-4.1"):
             if response.status_code != 200:
                 print(f"Error response: {response.text}")
                 return False
-            
+                
             result = response.json()
             
             # Verify response structure
@@ -208,11 +223,11 @@ async def test_streaming_completion(model: str = "gpt-4.1"):
                 response_id = None
                 final_usage = None
                 
-                print("Streaming response:")
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data = line[6:]  # Remove "data: " prefix
-                        if data.strip() == "[DONE]":
+                    print("Streaming response:")
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]  # Remove "data: " prefix
+                            if data.strip() == "[DONE]":
                             print("\n[OK] Stream completed")
                             break
                         try:
@@ -555,18 +570,18 @@ async def test_concurrent_streaming_requests(model: str = "gpt-4.1"):
                     if line.startswith("data: "):
                         data = line[6:]
                         if data.strip() == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            if "choices" in chunk and chunk["choices"]:
-                                delta = chunk["choices"][0].get("delta", {})
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                if "choices" in chunk and chunk["choices"]:
+                                    delta = chunk["choices"][0].get("delta", {})
                                 chunk_content = delta.get("content", "")
                                 if chunk_content:
                                     if first_chunk_time is None:
                                         first_chunk_time = time.time()
                                     chunks += 1
                                     content += chunk_content
-                        except json.JSONDecodeError:
+                            except json.JSONDecodeError:
                             continue
                 
                 elapsed = time.time() - start_time
@@ -763,7 +778,7 @@ async def test_large_token_request(model: str = "gpt-4.1"):
     
     if not ENABLE_LOAD_TESTS:
         print(f"\nSkipping large token test (load tests disabled)")
-        return True
+                    return True
     
     print(f"\nTesting large token request with model: {model}")
     print("Requesting max_tokens=6000 to test context window handling")
@@ -813,9 +828,9 @@ async def test_large_token_request(model: str = "gpt-4.1"):
             print(f"[TIME] Response time: {elapsed_time:.2f}s")
             
             if response.status_code != 200:
-                print(f"Error response: {response.text}")
-                return False
-            
+                    print(f"Error response: {response.text}")
+                    return False
+                    
             result = response.json()
             
             # Verify response structure
@@ -1197,14 +1212,14 @@ async def main():
             # Add timeout wrapper for each test to prevent hanging
             # Large token tests get more time, others get less
             timeout_seconds = 240 if "Large Token" in test_name else 120
-            try:
+        try:
                 print(f"\n[TEST] Starting: {test_name}")
                 result = await asyncio.wait_for(test_coro, timeout=timeout_seconds)
                 test_elapsed = time.time() - test_individual_start
-                results.append((test_name, result))
-                if result:
+            results.append((test_name, result))
+            if result:
                     print(f"[PASS] {test_name} ({test_elapsed:.1f}s)")
-                else:
+            else:
                     print(f"[FAIL] {test_name} ({test_elapsed:.1f}s)")
             except asyncio.TimeoutError:
                 test_elapsed = time.time() - test_individual_start

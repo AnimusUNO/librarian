@@ -1,5 +1,7 @@
 # 🕯️ Sanctum Pillar Agent — The Librarian
 
+**License**: [CC-BY-SA-4.0](../LICENSE-DOCS)
+
 An OpenAI proxy server and agent.
 
 ## Core Purpose

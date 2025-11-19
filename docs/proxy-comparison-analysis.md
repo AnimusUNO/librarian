@@ -1,5 +1,7 @@
 # Letta Proxy Implementations Comparison
 
+**License**: [CC-BY-SA-4.0](../LICENSE-DOCS)
+
 ## Overview
 
 Both repositories provide OpenAI-compatible proxy servers for Letta agents, but they take fundamentally different architectural approaches. Here's a detailed comparison of their capabilities, strengths, and limitations.
