@@ -10,6 +10,7 @@ import json
 import httpx
 import os
 import pytest
+import time
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -87,12 +88,15 @@ async def test_chat_completion(model: str = "gpt-4.1"):
     
     async with httpx.AsyncClient(timeout=TEST_TIMEOUT) as client:
         try:
+            start_time = time.time()
             response = await client.post(
                 f"{LIBRARIAN_BASE_URL}/v1/chat/completions",
                 json=payload,
                 headers={"Content-Type": "application/json"}
             )
+            elapsed_time = time.time() - start_time
             print(f"Chat completion status: {response.status_code}")
+            print(f"[TIME] Response time: {elapsed_time:.2f}s")
             
             if response.status_code != 200:
                 print(f"Error response: {response.text}")
@@ -143,6 +147,7 @@ async def test_chat_completion(model: str = "gpt-4.1"):
             preview = content[:100].encode('ascii', errors='replace').decode('ascii')
             print(f"[OK] Content preview: {preview}...")
             print(f"[OK] Usage: {usage}")
+            print(f"[TIME] Total request time: {elapsed_time:.2f}s ({elapsed_time*1000:.0f}ms)")
             
             return True
                 
@@ -180,6 +185,7 @@ async def test_streaming_completion(model: str = "gpt-4.1"):
     
     async with httpx.AsyncClient(timeout=TEST_TIMEOUT) as client:
         try:
+            start_time = time.time()
             async with client.stream(
                 "POST",
                 f"{LIBRARIAN_BASE_URL}/v1/chat/completions",
@@ -187,6 +193,7 @@ async def test_streaming_completion(model: str = "gpt-4.1"):
                 headers={"Content-Type": "application/json"}
             ) as response:
                 print(f"Streaming status: {response.status_code}")
+                first_chunk_time = None
                 
                 if response.status_code != 200:
                     print(f"[FAIL] Error response: {response.text}")
@@ -221,6 +228,10 @@ async def test_streaming_completion(model: str = "gpt-4.1"):
                                 delta = chunk["choices"][0].get("delta", {})
                                 content = delta.get("content", "")
                                 if content:
+                                    if first_chunk_time is None:
+                                        first_chunk_time = time.time()
+                                        time_to_first_chunk = first_chunk_time - start_time
+                                        print(f"\n[TIME] Time to first chunk: {time_to_first_chunk:.2f}s ({time_to_first_chunk*1000:.0f}ms)")
                                     chunks_received += 1
                                     full_content += content
                                     print(content, end="", flush=True)
@@ -235,6 +246,8 @@ async def test_streaming_completion(model: str = "gpt-4.1"):
                         except AssertionError as e:
                             print(f"\n[FAIL] Assertion failed in chunk: {str(e)}")
                             return False
+                
+                elapsed_time = time.time() - start_time
                 
                 # Verify we actually received content
                 assert chunks_received > 0, "No content chunks received"
@@ -261,6 +274,9 @@ async def test_streaming_completion(model: str = "gpt-4.1"):
                 print(f"[OK] Total content length: {len(full_content)} chars")
                 if final_usage:
                     print(f"[OK] Final usage: {final_usage}")
+                print(f"[TIME] Total streaming time: {elapsed_time:.2f}s ({elapsed_time*1000:.0f}ms)")
+                if final_usage and elapsed_time > 0:
+                    print(f"[PERF] Streaming tokens per second: {final_usage['completion_tokens']/elapsed_time:.1f} tokens/s")
                 
                 return True
                     
@@ -285,6 +301,7 @@ async def test_e2e_api_request(model: str = "gpt-4.1"):
         try:
             # Test a request that requires actual processing/calculation
             print("\nSending API request requiring real processing...")
+            start_time = time.time()
             response = await client.post(
                 f"{LIBRARIAN_BASE_URL}/v1/chat/completions",
                 json={
@@ -296,8 +313,10 @@ async def test_e2e_api_request(model: str = "gpt-4.1"):
                     "max_tokens": 200
                 }
             )
+            elapsed_time = time.time() - start_time
             
             assert response.status_code == 200, f"Request failed with status {response.status_code}: {response.text}"
+            print(f"[TIME] Response time: {elapsed_time:.2f}s ({elapsed_time*1000:.0f}ms)")
             result = response.json()
             
             # Verify response structure
@@ -344,6 +363,8 @@ async def test_e2e_api_request(model: str = "gpt-4.1"):
             preview = content[:150].encode('ascii', errors='replace').decode('ascii')
             print(f"[OK] Content preview: {preview}...")
             print(f"[OK] Usage: {usage['total_tokens']} total tokens ({usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion)")
+            print(f"[TIME] Total request time: {elapsed_time:.2f}s ({elapsed_time*1000:.0f}ms)")
+            print(f"[PERF] Tokens per second: {usage['total_tokens']/elapsed_time:.1f} tokens/s")
             print("[OK] E2E API request test passed - agent processed the request!")
             
             return True

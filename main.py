@@ -171,18 +171,27 @@ async def handle_non_streaming_response(
     model_name: str,
     openai_messages: list,
     system_content: Optional[str],
-    user_id: Optional[str]
+    user_id: Optional[str],
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None
 ) -> ChatCompletionResponse:
     """Handle non-streaming chat completion"""
     try:
         # Use create_stream() and collect chunks
         # Note: create() fails with this agent due to model_endpoint=None in agent config
         # Streaming works, so we use it for both streaming and non-streaming
-        stream = letta_client.agents.messages.create_stream(
-            agent_id=agent_id,
-            messages=message_objects,
-            stream_tokens=True
-        )
+        stream_kwargs = {
+            "agent_id": agent_id,
+            "messages": message_objects,
+            "stream_tokens": True
+        }
+        # Pass through max_tokens and temperature if provided
+        if max_tokens is not None:
+            stream_kwargs["max_tokens"] = max_tokens
+        if temperature is not None:
+            stream_kwargs["temperature"] = temperature
+        
+        stream = letta_client.agents.messages.create_stream(**stream_kwargs)
         
         # Collect all chunks from stream
         response_content = ""
@@ -241,7 +250,9 @@ async def handle_streaming_response(
     model_name: str,
     openai_messages: list,
     system_content: Optional[str],
-    user_id: Optional[str]
+    user_id: Optional[str],
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None
 ) -> StreamingResponse:
     """Handle streaming chat completion"""
     
@@ -249,11 +260,18 @@ async def handle_streaming_response(
         try:
             # Create streaming message with Letta client
             # create_stream() returns an async generator, don't await it
-            stream = letta_client.agents.messages.create_stream(
-                agent_id=agent_id,
-                messages=message_objects,
-                stream_tokens=True  # Enable token-level streaming
-            )
+            stream_kwargs = {
+                "agent_id": agent_id,
+                "messages": message_objects,
+                "stream_tokens": True  # Enable token-level streaming
+            }
+            # Pass through max_tokens and temperature if provided
+            if max_tokens is not None:
+                stream_kwargs["max_tokens"] = max_tokens
+            if temperature is not None:
+                stream_kwargs["temperature"] = temperature
+            
+            stream = letta_client.agents.messages.create_stream(**stream_kwargs)
             
             response_id = f"chatcmpl-{uuid.uuid4().hex}"
             full_content = ""
@@ -442,6 +460,74 @@ async def get_model(model_id: str):
         owned_by="librarian"
     )
 
+async def check_token_capacity(
+    agent_id: str, 
+    request_tokens: int, 
+    requested_max_tokens: Optional[int] = None
+) -> tuple[bool, Optional[str], Optional[Dict[str, int]]]:
+    """
+    Check if request would exceed agent's token capacity.
+    Validates both prompt tokens and requested max_tokens against available capacity.
+    
+    Args:
+        agent_id: Letta agent ID
+        request_tokens: Estimated tokens for the prompt
+        requested_max_tokens: max_tokens value requested by user (None if not specified)
+    
+    Returns:
+        (is_valid, error_message, capacity_info) where:
+        - is_valid: True if request fits within capacity
+        - error_message: Error message if invalid, None if valid
+        - capacity_info: Dict with max_tokens, current_tokens, available_tokens, request_tokens
+    """
+    try:
+        context = await letta_client.agents.context.retrieve(agent_id=agent_id)
+        context_dict = context.model_dump()
+        
+        max_context_window = context_dict.get('context_window_size_max', 0)
+        current_tokens = context_dict.get('context_window_size_current', 0)
+        available_tokens = max_context_window - current_tokens
+        
+        capacity_info = {
+            'max_tokens': max_context_window,
+            'current_tokens': current_tokens,
+            'available_tokens': available_tokens,
+            'request_tokens': request_tokens
+        }
+        
+        # Check 1: Validate requested max_tokens doesn't exceed available capacity
+        if requested_max_tokens is not None:
+            max_allowed_completion = available_tokens - request_tokens
+            if requested_max_tokens > max_allowed_completion:
+                error_msg = (
+                    f"Requested max_tokens ({requested_max_tokens:,}) exceeds available capacity. "
+                    f"Maximum allowed: {max_allowed_completion:,} tokens "
+                    f"(context window: {max_context_window:,} - current usage: {current_tokens:,} - prompt tokens: ~{request_tokens:,})."
+                )
+                return False, error_msg, capacity_info
+        
+        # Check 2: Validate total request (prompt + completion) fits
+        # Use requested max_tokens if provided, otherwise estimate 100 tokens
+        estimated_completion_tokens = requested_max_tokens if requested_max_tokens is not None else 100
+        total_needed = request_tokens + estimated_completion_tokens
+        
+        if total_needed > available_tokens:
+            max_allowed_completion = max(0, available_tokens - request_tokens)
+            error_msg = (
+                f"Request would exceed token capacity. "
+                f"Available: {available_tokens:,} tokens, needed: ~{total_needed:,} tokens. "
+                f"Current usage: {current_tokens:,}/{max_context_window:,} tokens ({current_tokens/max_context_window*100:.1f}% used). "
+                f"Maximum completion tokens allowed: {max_allowed_completion:,}."
+            )
+            return False, error_msg, capacity_info
+        
+        return True, None, capacity_info
+        
+    except Exception as e:
+        logger.warning(f"Failed to check token capacity for agent {agent_id}: {e}")
+        # If we can't check, allow the request (fail open)
+        return True, None, None
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """Main OpenAI-compatible chat completions endpoint"""
@@ -458,6 +544,28 @@ async def chat_completions(request: ChatCompletionRequest):
         agent_config = model_registry.get_agent_config(request.model)
         agent_id = agent_config['agent_id']
         logger.info(f"Processing request for model {request.model} -> agent {agent_id}")
+        
+        # Estimate request tokens before processing
+        openai_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        estimated_prompt_tokens = token_counter.count_messages_tokens(openai_messages, request.model)
+        
+        # Check token capacity (validates both prompt tokens and requested max_tokens)
+        is_valid, error_message, capacity_info = await check_token_capacity(
+            agent_id, 
+            estimated_prompt_tokens,
+            requested_max_tokens=request.max_tokens
+        )
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "message": error_message or "Request would exceed token capacity",
+                        "type": "invalid_request_error",
+                        "code": "context_length_exceeded"
+                    }
+                }
+            )
         
         # Convert messages to Letta format
         openai_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
@@ -501,12 +609,16 @@ async def chat_completions(request: ChatCompletionRequest):
         if request.stream:
             return await handle_streaming_response(
                 agent_id, message_objects, request.model, 
-                openai_messages, system_content, request.user
+                openai_messages, system_content, request.user,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature
             )
         else:
             return await handle_non_streaming_response(
                 agent_id, message_objects, request.model,
-                openai_messages, system_content, request.user
+                openai_messages, system_content, request.user,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature
             )
             
     except HTTPException:
