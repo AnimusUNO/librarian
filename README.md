@@ -55,10 +55,8 @@ cd bootstrap
 python bootstrap_librarian.py --config bootstrap.env
 ```
 
-This creates three agents:
-- `librarian-worker` - Worker Mode (procedural tasks)
-- `librarian-persona` - Persona Mode (expressive responses)
-- `librarian-persona-turbo` - High-performance Persona Mode
+This creates a single agent:
+- `librarian` - The Librarian agent that handles all model names and dynamically switches between Worker Mode (procedural tasks) and Persona Mode (expressive responses) based on the request context
 
 ### Run The Librarian
 
@@ -230,7 +228,7 @@ See the LICENSE files for full terms.
 
 ## 🙏 Acknowledgments
 
-The Librarian is part of the Sanctum ecosystem, providing persistent intelligence and context continuity for AI applications.
+The Librarian is part of the **Sanctum** and **Animus** ecosystem, providing persistent intelligence and context continuity for AI applications. This project is built on and integrates with the **Letta** ecosystem.
 
 ## 📞 Support
 
