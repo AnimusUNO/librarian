@@ -223,11 +223,11 @@ async def test_streaming_completion(model: str = "gpt-4.1"):
                 response_id = None
                 final_usage = None
                 
-                    print("Streaming response:")
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data = line[6:]  # Remove "data: " prefix
-                            if data.strip() == "[DONE]":
+                print("Streaming response:")
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data = line[6:]  # Remove "data: " prefix
+                        if data.strip() == "[DONE]":
                             print("\n[OK] Stream completed")
                             break
                         try:
@@ -570,18 +570,18 @@ async def test_concurrent_streaming_requests(model: str = "gpt-4.1"):
                     if line.startswith("data: "):
                         data = line[6:]
                         if data.strip() == "[DONE]":
-                                break
-                            try:
-                                chunk = json.loads(data)
-                                if "choices" in chunk and chunk["choices"]:
-                                    delta = chunk["choices"][0].get("delta", {})
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            if "choices" in chunk and chunk["choices"]:
+                                delta = chunk["choices"][0].get("delta", {})
                                 chunk_content = delta.get("content", "")
                                 if chunk_content:
                                     if first_chunk_time is None:
                                         first_chunk_time = time.time()
                                     chunks += 1
                                     content += chunk_content
-                            except json.JSONDecodeError:
+                        except json.JSONDecodeError:
                             continue
                 
                 elapsed = time.time() - start_time
@@ -778,7 +778,7 @@ async def test_large_token_request(model: str = "gpt-4.1"):
     
     if not ENABLE_LOAD_TESTS:
         print(f"\nSkipping large token test (load tests disabled)")
-                    return True
+        return True
     
     print(f"\nTesting large token request with model: {model}")
     print("Requesting max_tokens=6000 to test context window handling")
@@ -1208,23 +1208,22 @@ async def main():
     test_start_time = time.time()
     for test_name, test_coro in tests:
         test_individual_start = time.time()
+        # Add timeout wrapper for each test to prevent hanging
+        # Large token tests get more time, others get less
+        timeout_seconds = 240 if "Large Token" in test_name else 120
         try:
-            # Add timeout wrapper for each test to prevent hanging
-            # Large token tests get more time, others get less
-            timeout_seconds = 240 if "Large Token" in test_name else 120
-        try:
-                print(f"\n[TEST] Starting: {test_name}")
-                result = await asyncio.wait_for(test_coro, timeout=timeout_seconds)
-                test_elapsed = time.time() - test_individual_start
+            print(f"\n[TEST] Starting: {test_name}")
+            result = await asyncio.wait_for(test_coro, timeout=timeout_seconds)
+            test_elapsed = time.time() - test_individual_start
             results.append((test_name, result))
             if result:
-                    print(f"[PASS] {test_name} ({test_elapsed:.1f}s)")
+                print(f"[PASS] {test_name} ({test_elapsed:.1f}s)")
             else:
-                    print(f"[FAIL] {test_name} ({test_elapsed:.1f}s)")
-            except asyncio.TimeoutError:
-                test_elapsed = time.time() - test_individual_start
-                print(f"[TIMEOUT] {test_name} - exceeded {timeout_seconds}s limit ({test_elapsed:.1f}s)")
-                results.append((test_name, False))
+                print(f"[FAIL] {test_name} ({test_elapsed:.1f}s)")
+        except asyncio.TimeoutError:
+            test_elapsed = time.time() - test_individual_start
+            print(f"[TIMEOUT] {test_name} - exceeded {timeout_seconds}s limit ({test_elapsed:.1f}s)")
+            results.append((test_name, False))
         except Exception as e:
             test_elapsed = time.time() - test_individual_start
             print(f"[ERROR] {test_name} - {str(e)} ({test_elapsed:.1f}s)")
