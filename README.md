@@ -22,8 +22,7 @@ The Librarian serves as a middleware proxy that:
 ### Prerequisites
 
 - Python 3.10 or higher
-- Access to a Letta server
-- Letta API key
+- A self-hosted Letta server (cloud support may come in a future version)
 
 ### Installation
 
@@ -42,8 +41,8 @@ pip install -r requirements.txt
 # Copy configuration template
 cp config.example config
 
-# Edit config with your Letta server details
-# Set LETTA_BASE_URL and LETTA_API_KEY
+# Edit config with your self-hosted Letta server details
+# Set LETTA_BASE_URL (and LETTA_API_KEY if your Letta server requires authentication)
 ```
 
 ### Bootstrap Agents
@@ -158,8 +157,10 @@ The Librarian is configured via environment variables. See `config.example` for 
 
 Key configuration areas:
 - **Server Configuration**: Host, port, debug mode
-- **Letta Server**: Base URL, API key, timeout
+- **Letta Server**: Base URL of your self-hosted Letta server (API key if authentication is required)
 - **Agent Configuration**: Agent IDs and model mappings
+
+**Note**: The Librarian currently requires a self-hosted Letta server. Cloud/hosted Letta support may be added in a future version.
 - **Security**: IP filtering, API key authentication
 - **Performance**: Concurrency limits, queue settings
 - **Logging**: Log levels and formats
