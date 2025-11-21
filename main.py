@@ -420,19 +420,19 @@ async def _generate_stream_chunks(
                             if error_result.should_retry:
                                 should_retry = True
                                 break
+                            else:
+                                # Not retryable, yield error and return
+                                if isinstance(error_result.error_response, str):
+                                    yield error_result.error_response
                                 else:
-                                    # Not retryable, yield error and return
-                                    if isinstance(error_result.error_response, str):
-                                        yield error_result.error_response
-                                    else:
-                                        # Fallback error chunk
-                                        error_chunk_str = error_handler.format_error_response(
-                                            error_exception,
-                                            error_result.error_type or ErrorType.SERVER_ERROR,
-                                            is_streaming=True
-                                        )
-                                        yield error_chunk_str
-                                    return
+                                    # Fallback error chunk
+                                    error_chunk_str = error_handler.format_error_response(
+                                        error_exception,
+                                        error_result.error_type or ErrorType.SERVER_ERROR,
+                                        is_streaming=True
+                                    )
+                                    yield error_chunk_str
+                                return
                         
                         elif event_type == 'stop_reason':
                             stop_reason = getattr(chunk, 'stop_reason', None)
