@@ -42,6 +42,7 @@ from letta_client import LlmConfig
 from src.librarian import ModelRegistry, MessageTranslator, ResponseFormatter, TokenCounter
 from src.librarian.tool_synchronizer import ToolSynchronizer
 from src.librarian.load_manager import LoadManager, RequestStatus
+from src.librarian.security import SecurityMiddleware
 
 # Load environment variables
 load_dotenv()
@@ -84,6 +85,9 @@ max_request_size = int(os.getenv("LIBRARIAN_MAX_REQUEST_SIZE", "10485760"))  # 1
 request_timeout = int(os.getenv("LIBRARIAN_REQUEST_TIMEOUT", "300"))  # 5 minutes
 keep_alive_timeout = int(os.getenv("LIBRARIAN_KEEP_ALIVE_TIMEOUT", "5"))
 
+# Security event logging configuration
+log_security_events = os.getenv("LIBRARIAN_LOG_SECURITY_EVENTS", "true").lower() == "true"
+
 logger.info(f"Configuration loaded: host={host}, port={port}, debug={debug_mode}")
 logger.info(f"Letta config: base_url={letta_base_url}, timeout={letta_timeout}")
 logger.info(f"Security: ip_filtering={enable_ip_filtering}, api_key_required={api_key_required}")
@@ -96,6 +100,20 @@ app = FastAPI(
     version=os.getenv("LIBRARIAN_VERSION", "0.1.0"),
     docs_url="/docs" if docs_enabled else None,
     redoc_url="/redoc" if docs_enabled else None,
+)
+
+# Add security middleware (all features are configurable and opt-in)
+app.add_middleware(
+    SecurityMiddleware,
+    enable_ip_filtering=enable_ip_filtering,
+    allowed_ips=allowed_ips,
+    blocked_ips=blocked_ips,
+    api_key_required=api_key_required,
+    api_key=api_key,
+    rate_limit_enabled=rate_limit_enabled,
+    rate_limit_requests=rate_limit_requests,
+    rate_limit_window=rate_limit_window,
+    log_security_events=log_security_events
 )
 
 # Initialize Letta client with configuration
@@ -407,6 +425,19 @@ async def handle_non_streaming_response(
                         status_code=500,
                         detail={"error": {"message": f"Failed to generate response: {str(e)}", "type": "server_error"}}
                     )
+        
+        # If we get here, all retries failed
+        if original_config is not None:
+            await restore_agent_config(agent_id, original_config)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": {"message": "Failed to generate response after retries", "type": "server_error"}}
+        )
+    except Exception as e:
+        # Ensure config is restored even on unexpected errors
+        if original_config is not None:
+            await restore_agent_config(agent_id, original_config)
+        raise
 
         # If we get here, all retries failed
         if original_config is not None:
