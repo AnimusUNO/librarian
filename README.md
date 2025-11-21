@@ -180,16 +180,23 @@ See [Security Configuration](docs/librarian-security-configuration.md) for setup
 ## 🧪 Testing
 
 ```bash
-# Run all tests
-python tests/test_librarian_integration.py
+# Run all unit tests (excludes integration/E2E to avoid burning tokens)
+pytest -k "not integration and not e2e" tests/ -v
 
-# Run specific test suites
-python tests/test_token_counting.py
-python tests/test_compatibility.py
+# Run all tests including integration/E2E (requires running server)
+pytest tests/ -v
+
+# Run only integration/E2E tests (requires running server)
+pytest -m integration tests/ -v
+
+# Run with coverage report
+pytest --cov=src --cov-report=term-missing -k "not integration and not e2e" tests/
 
 # Validate configuration
 python tests/validate_config.py
 ```
+
+**Test Coverage**: 93.97% unit test coverage. See [Test Coverage Report](docs/test-coverage-report.md) for details.
 
 ## 📦 Project Structure
 
