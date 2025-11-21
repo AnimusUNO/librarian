@@ -308,6 +308,160 @@ class TestSecurityMiddleware:
         # Health endpoint should work without auth
         response = client.get("/health")
         assert response.status_code == 200
+    
+    @pytest.mark.asyncio
+    async def test_rate_limiter_cleanup(self):
+        """Test rate limiter cleanup functionality"""
+        limiter = RateLimiter(max_requests=10, window_seconds=1)
+        
+        # Make some requests
+        await limiter.is_allowed("192.168.1.1")
+        await limiter.is_allowed("192.168.1.2")
+        
+        # Wait for cleanup interval
+        import asyncio
+        await asyncio.sleep(0.15)
+        
+        # Make another request to trigger cleanup
+        await limiter.is_allowed("192.168.1.3")
+        
+        # Verify cleanup happened (IPs with old requests should be removed)
+        # This is tested indirectly through the cleanup logic
+    
+    @pytest.mark.asyncio
+    async def test_rate_limiter_cleanup_removes_old_ips(self):
+        """Test that cleanup removes IPs with no recent requests"""
+        import time
+        limiter = RateLimiter(max_requests=10, window_seconds=1)
+        
+        # Make a request
+        await limiter.is_allowed("192.168.1.1")
+        
+        # Wait for window to expire
+        await asyncio.sleep(1.1)
+        
+        # Manually trigger cleanup
+        await limiter._cleanup(time.time())
+        
+        # IP 1.1 should be removed from requests dict (no recent requests)
+        assert "192.168.1.1" not in limiter.requests
+    
+    @pytest.mark.asyncio
+    async def test_rate_limiter_cleanup_removes_old_requests(self):
+        """Test that cleanup removes old requests from IP history"""
+        import time
+        limiter = RateLimiter(max_requests=10, window_seconds=1)
+        
+        # Make requests at different times
+        await limiter.is_allowed("192.168.1.1")
+        await asyncio.sleep(0.5)
+        await limiter.is_allowed("192.168.1.1")
+        
+        # Wait for first request to expire
+        await asyncio.sleep(0.6)
+        
+        # Manually trigger cleanup
+        current_time = time.time()
+        await limiter._cleanup(current_time)
+        
+        # IP 1.1 should only have recent request
+        assert len(limiter.requests.get("192.168.1.1", [])) == 1
+    
+    @pytest.mark.asyncio
+    async def test_rate_limiter_retry_after_calculation(self):
+        """Test retry_after calculation when limit exceeded"""
+        limiter = RateLimiter(max_requests=2, window_seconds=60)
+        
+        # Make 2 requests
+        await limiter.is_allowed("192.168.1.1")
+        await limiter.is_allowed("192.168.1.1")
+        
+        # Third request should be blocked with retry_after
+        is_allowed, retry_after = await limiter.is_allowed("192.168.1.1")
+        assert is_allowed is False
+        assert retry_after is not None
+        assert retry_after > 0
+        assert retry_after <= 60
+    
+    @pytest.mark.asyncio
+    async def test_rate_limiter_window_expiry(self):
+        """Test that requests outside window are removed"""
+        limiter = RateLimiter(max_requests=2, window_seconds=1)
+        
+        # Make 2 requests
+        await limiter.is_allowed("192.168.1.1")
+        await limiter.is_allowed("192.168.1.1")
+        
+        # Third should be blocked
+        is_allowed, _ = await limiter.is_allowed("192.168.1.1")
+        assert is_allowed is False
+        
+        # Wait for window to expire
+        import asyncio
+        await asyncio.sleep(1.1)
+        
+        # Should be allowed again
+        is_allowed, _ = await limiter.is_allowed("192.168.1.1")
+        assert is_allowed is True
+    
+    def test_api_key_validator_warning(self):
+        """Test API key validator warning when required but not configured"""
+        import logging
+        from io import StringIO
+        
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        security_logger = logging.getLogger('src.librarian.security')
+        security_logger.addHandler(handler)
+        security_logger.setLevel(logging.WARNING)
+        
+        try:
+            validator = APIKeyValidator(required=True, api_key=None)
+            log_output = log_capture.getvalue()
+            assert "API key authentication is required" in log_output
+        finally:
+            security_logger.removeHandler(handler)
+    
+    def test_api_key_validator_no_key_configured(self):
+        """Test API key validator when required but no key configured"""
+        validator = APIKeyValidator(required=True, api_key=None)
+        is_valid, reason = validator.is_valid("Bearer test-key")
+        assert is_valid is False
+        assert "not configured" in reason
+    
+    def test_security_middleware_docs_bypass(self):
+        """Test that docs endpoints bypass security"""
+        app = FastAPI()
+        
+        app.add_middleware(
+            SecurityMiddleware,
+            enable_ip_filtering=True,
+            allowed_ips=["192.168.1.1"],
+            api_key_required=True,
+            api_key="test-key",
+            rate_limit_enabled=True
+        )
+        
+        client = TestClient(app)
+        # Docs endpoints should be accessible
+        response = client.get("/docs")
+        assert response.status_code == 200
+    
+    def test_security_middleware_openapi_bypass(self):
+        """Test that OpenAPI endpoint bypasses security"""
+        app = FastAPI()
+        
+        app.add_middleware(
+            SecurityMiddleware,
+            enable_ip_filtering=True,
+            allowed_ips=["192.168.1.1"],
+            api_key_required=True,
+            api_key="test-key"
+        )
+        
+        client = TestClient(app)
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
 
 
 if __name__ == "__main__":

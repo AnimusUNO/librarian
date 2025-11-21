@@ -20,10 +20,16 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-import openai
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 import json
 import time
+import pytest
 
+@pytest.mark.skipif(not OPENAI_AVAILABLE, reason="openai module not available")
 def test_openai_compatibility():
     """Test OpenAI client compatibility with The Librarian"""
     

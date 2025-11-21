@@ -20,7 +20,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import pytest
 import os
+import logging
 from src.librarian.config import Config
+from src.librarian import config as config_module
+
+logger = logging.getLogger(__name__)
 
 
 class TestConfig:
@@ -163,6 +167,102 @@ class TestConfig:
         assert config.cleanup_interval > 0
         assert isinstance(config.enable_auto_duplication, bool)
         assert config.max_clones_per_agent > 0
+    
+    def test_config_validation_warnings(self):
+        """Test config validation warnings"""
+        import logging
+        from io import StringIO
+        
+        # Test warning for missing API key when required
+        config = Config(
+            api_key_required=True,
+            api_key=None
+        )
+        
+        # Capture log output from config module logger
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        config_logger = logging.getLogger('src.librarian.config')
+        config_logger.addHandler(handler)
+        config_logger.setLevel(logging.WARNING)
+        
+        try:
+            config.validate_config()
+            log_output = log_capture.getvalue()
+            assert "API key authentication is required" in log_output
+        finally:
+            config_logger.removeHandler(handler)
+    
+    def test_config_validation_ip_filtering_warning(self):
+        """Test config validation warning for IP filtering"""
+        import logging
+        from io import StringIO
+        
+        # Test warning for IP filtering enabled but no IPs configured
+        config = Config(
+            enable_ip_filtering=True,
+            allowed_ips=[],
+            blocked_ips=[]
+        )
+        
+        # Capture log output from config module logger
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        config_logger = logging.getLogger('src.librarian.config')
+        config_logger.addHandler(handler)
+        config_logger.setLevel(logging.WARNING)
+        
+        try:
+            config.validate_config()
+            log_output = log_capture.getvalue()
+            assert "IP filtering is enabled" in log_output
+        finally:
+            config_logger.removeHandler(handler)
+    
+    def test_config_validation_rate_limit_error(self):
+        """Test config validation error for invalid rate limit"""
+        # Rate limit validation happens at Pydantic level, not in validate_config
+        # So we test the Pydantic validator instead
+        with pytest.raises(Exception):  # Pydantic ValidationError
+            config = Config(
+                rate_limit_enabled=True,
+                rate_limit_requests=0  # Invalid - caught by Pydantic validator
+            )
+    
+    def test_log_summary(self):
+        """Test log summary method"""
+        import logging
+        from io import StringIO
+        
+        config = Config(
+            host="0.0.0.0",
+            port=9000,
+            debug=True,
+            letta_base_url="http://test:8283",
+            letta_timeout=60,
+            enable_ip_filtering=True,
+            api_key_required=True,
+            rate_limit_enabled=True,
+            rate_limit_requests=200,
+            rate_limit_window=120
+        )
+        
+        # Capture log output from config module logger
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        config_logger = logging.getLogger('src.librarian.config')
+        config_logger.addHandler(handler)
+        config_logger.setLevel(logging.INFO)
+        
+        try:
+            config.log_summary()
+            log_output = log_capture.getvalue()
+            assert "0.0.0.0" in log_output
+            assert "9000" in log_output
+            assert "http://test:8283" in log_output
+            assert "ip_filtering=True" in log_output
+        finally:
+            config_logger.removeHandler(handler)
 
 
 if __name__ == "__main__":

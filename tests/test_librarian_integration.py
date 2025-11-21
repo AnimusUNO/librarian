@@ -28,6 +28,9 @@ import pytest
 import time
 from dotenv import load_dotenv
 
+# Mark all tests in this file as integration tests
+pytestmark = pytest.mark.integration
+
 # Load environment variables
 load_dotenv()
 

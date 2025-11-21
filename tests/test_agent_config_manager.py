@@ -228,6 +228,130 @@ class TestAgentConfigManager:
         
         # Verify both calls were attempted
         assert mock_letta_client.agents.modify.call_count == 2
+    
+    @pytest.mark.asyncio
+    async def test_context_manager_configuration_failure(self, manager, mock_letta_client):
+        """Test context manager when configuration fails"""
+        agent_id = "test-agent"
+        original_config = LlmConfig(
+            model="gpt-4",
+            model_endpoint_type="openai",
+            context_window=8192,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Mock agent state
+        mock_agent_state = Mock()
+        mock_agent_state.llm_config = original_config
+        mock_letta_client.agents.retrieve.return_value = mock_agent_state
+        
+        # Make retrieve fail
+        mock_letta_client.agents.retrieve.side_effect = Exception("Retrieve failed")
+        
+        # Should not raise, just skip configuration
+        async with manager.temporary_config(agent_id, temperature=0.9):
+            pass
+        
+        # Verify retrieve was called but modify was not
+        assert mock_letta_client.agents.retrieve.call_count == 1
+        assert mock_letta_client.agents.modify.call_count == 0
+    
+    @pytest.mark.asyncio
+    async def test_context_manager_modify_failure(self, manager, mock_letta_client):
+        """Test context manager when modify fails"""
+        agent_id = "test-agent"
+        original_config = LlmConfig(
+            model="gpt-4",
+            model_endpoint_type="openai",
+            context_window=8192,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Mock agent state
+        mock_agent_state = Mock()
+        mock_agent_state.llm_config = original_config
+        mock_letta_client.agents.retrieve.return_value = mock_agent_state
+        
+        # Make modify fail
+        mock_letta_client.agents.modify.side_effect = Exception("Modify failed")
+        
+        # Should not raise, just skip configuration
+        async with manager.temporary_config(agent_id, temperature=0.9):
+            pass
+        
+        # Verify retrieve was called, modify was attempted
+        assert mock_letta_client.agents.retrieve.call_count == 1
+        assert mock_letta_client.agents.modify.call_count == 1
+    
+    @pytest.mark.asyncio
+    async def test_context_manager_lock_not_found(self, manager, mock_letta_client):
+        """Test context manager when lock is not found during exit"""
+        agent_id = "test-agent"
+        original_config = LlmConfig(
+            model="gpt-4",
+            model_endpoint_type="openai",
+            context_window=8192,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Mock agent state
+        mock_agent_state = Mock()
+        mock_agent_state.llm_config = original_config
+        mock_letta_client.agents.retrieve.return_value = mock_agent_state
+        mock_letta_client.agents.modify.return_value = None
+        
+        # Create context and manually remove lock to simulate edge case
+        context = AgentConfigContext(manager, agent_id, temperature=0.9)
+        await context.__aenter__()
+        
+        # Remove lock to simulate edge case
+        async with manager.lock:
+            if agent_id in manager.agent_locks:
+                del manager.agent_locks[agent_id]
+        
+        # Exit should handle missing lock gracefully
+        await context.__aexit__(None, None, None)
+        
+        # Verify modify was called once (for config change)
+        assert mock_letta_client.agents.modify.call_count == 1
+    
+    @pytest.mark.asyncio
+    async def test_context_manager_lock_not_held(self, manager, mock_letta_client):
+        """Test context manager when lock is not held during exit"""
+        agent_id = "test-agent"
+        original_config = LlmConfig(
+            model="gpt-4",
+            model_endpoint_type="openai",
+            context_window=8192,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Mock agent state
+        mock_agent_state = Mock()
+        mock_agent_state.llm_config = original_config
+        mock_letta_client.agents.retrieve.return_value = mock_agent_state
+        mock_letta_client.agents.modify.return_value = None
+        
+        # Create context and enter
+        context = AgentConfigContext(manager, agent_id, temperature=0.9)
+        await context.__aenter__()
+        
+        # Manually release lock to simulate edge case
+        async with manager.lock:
+            if agent_id in manager.agent_locks:
+                lock = manager.agent_locks[agent_id]
+                if lock.locked():
+                    lock.release()
+        
+        # Exit should handle unlocked state gracefully
+        await context.__aexit__(None, None, None)
+        
+        # Verify modify was called once (for config change, restore skipped)
+        assert mock_letta_client.agents.modify.call_count == 1
 
 
 if __name__ == "__main__":
