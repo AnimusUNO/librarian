@@ -31,14 +31,21 @@ logger = logging.getLogger(__name__)
 class ModelRegistry:
     """Maps OpenAI model names to Letta agent configurations"""
     
-    def __init__(self):
+    def __init__(self, librarian_agent: str = "librarian"):
+        """
+        Initialize model registry.
+        
+        Args:
+            librarian_agent: Default Librarian agent ID or name
+        """
+        self.librarian_agent = librarian_agent
         self.models = self._load_model_config()
     
     def _load_model_config(self) -> Dict[str, Dict[str, str]]:
         """Load model configuration from environment variables"""
         # Default model mappings - all map to the same agent
         # The agent decides which model to use internally via model selector
-        librarian_agent_id = os.getenv("LIBRARIAN_AGENT", "librarian")
+        librarian_agent_id = self.librarian_agent
         default_models = {
             "gpt-4.1": {
                 "agent_id": librarian_agent_id,

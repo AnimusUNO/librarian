@@ -54,14 +54,32 @@ class RequestItem:
 class LoadManager:
     """Manages request load and auto-duplication"""
     
-    def __init__(self):
-        # Load configuration from environment
-        self.max_concurrent = int(os.getenv("LIBRARIAN_MAX_CONCURRENT", "10"))
-        self.duplication_threshold = int(os.getenv("LIBRARIAN_DUPLICATION_THRESHOLD", "8"))
-        self.queue_timeout = int(os.getenv("LIBRARIAN_QUEUE_TIMEOUT", "300"))  # 5 minutes
-        self.cleanup_interval = int(os.getenv("LIBRARIAN_CLEANUP_INTERVAL", "60"))  # 1 minute
-        self.enable_auto_duplication = os.getenv("LIBRARIAN_ENABLE_AUTO_DUPLICATION", "true").lower() == "true"
-        self.max_clones_per_agent = int(os.getenv("LIBRARIAN_MAX_CLONES_PER_AGENT", "3"))
+    def __init__(
+        self,
+        max_concurrent: int = 10,
+        duplication_threshold: int = 8,
+        queue_timeout: int = 300,
+        cleanup_interval: int = 60,
+        enable_auto_duplication: bool = True,
+        max_clones_per_agent: int = 3
+    ):
+        """
+        Initialize load manager.
+        
+        Args:
+            max_concurrent: Maximum concurrent requests
+            duplication_threshold: Queue threshold for auto-duplication
+            queue_timeout: Queue timeout in seconds
+            cleanup_interval: Cleanup interval in seconds
+            enable_auto_duplication: Enable auto-duplication
+            max_clones_per_agent: Maximum clones per agent
+        """
+        self.max_concurrent = max_concurrent
+        self.duplication_threshold = duplication_threshold
+        self.queue_timeout = queue_timeout
+        self.cleanup_interval = cleanup_interval
+        self.enable_auto_duplication = enable_auto_duplication
+        self.max_clones_per_agent = max_clones_per_agent
         
         # Initialize state
         self.request_queue: List[RequestItem] = []

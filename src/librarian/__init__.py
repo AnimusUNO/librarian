@@ -25,6 +25,7 @@ from .response_formatter import ResponseFormatter
 from .token_counter import TokenCounter
 from .tool_synchronizer import ToolSynchronizer
 from .load_manager import LoadManager
+from .config import Config
 
 __all__ = [
     "ModelRegistry",
@@ -32,5 +33,6 @@ __all__ = [
     "ResponseFormatter",
     "TokenCounter",
     "ToolSynchronizer",
-    "LoadManager"
+    "LoadManager",
+    "Config"
 ]

@@ -43,77 +43,43 @@ from src.librarian import ModelRegistry, MessageTranslator, ResponseFormatter, T
 from src.librarian.tool_synchronizer import ToolSynchronizer
 from src.librarian.load_manager import LoadManager, RequestStatus
 from src.librarian.security import SecurityMiddleware
+from src.librarian.config import Config
 
-# Load environment variables
-load_dotenv()
+# Load and validate configuration
+config = Config.load()
+config.validate_config()
 
 # Configure logging
-log_level = os.getenv("LIBRARIAN_LOG_LEVEL", "INFO").upper()
-log_format = os.getenv("LIBRARIAN_LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
 logging.basicConfig(
-    level=getattr(logging, log_level, logging.INFO),
-    format=log_format
+    level=getattr(logging, config.log_level, logging.INFO),
+    format=config.log_format
 )
 logger = logging.getLogger(__name__)
 
-# Server configuration
-debug_mode = os.getenv("LIBRARIAN_DEBUG", "false").lower() == "true"
-host = os.getenv("LIBRARIAN_HOST", "127.0.0.1")
-port = int(os.getenv("LIBRARIAN_PORT", "8000"))
-docs_enabled = debug_mode or os.getenv("LIBRARIAN_ENABLE_DOCS", "false").lower() == "true"
-
-# Letta client configuration
-letta_base_url = os.getenv("LETTA_BASE_URL", "http://localhost:8283")
-letta_api_key = os.getenv("LETTA_API_KEY")
-letta_timeout = int(os.getenv("LETTA_TIMEOUT", "30"))
-
-# Security configuration
-enable_ip_filtering = os.getenv("LIBRARIAN_ENABLE_IP_FILTERING", "false").lower() == "true"
-allowed_ips = os.getenv("LIBRARIAN_ALLOWED_IPS", "").split(",") if os.getenv("LIBRARIAN_ALLOWED_IPS") else []
-blocked_ips = os.getenv("LIBRARIAN_BLOCKED_IPS", "").split(",") if os.getenv("LIBRARIAN_BLOCKED_IPS") else []
-api_key_required = os.getenv("LIBRARIAN_API_KEY_REQUIRED", "false").lower() == "true"
-api_key = os.getenv("LIBRARIAN_API_KEY")
-
-# Rate limiting configuration
-rate_limit_enabled = os.getenv("LIBRARIAN_RATE_LIMIT_ENABLED", "false").lower() == "true"
-rate_limit_requests = int(os.getenv("LIBRARIAN_RATE_LIMIT_REQUESTS", "100"))
-rate_limit_window = int(os.getenv("LIBRARIAN_RATE_LIMIT_WINDOW", "60"))
-
-# Performance configuration
-max_request_size = int(os.getenv("LIBRARIAN_MAX_REQUEST_SIZE", "10485760"))  # 10MB
-request_timeout = int(os.getenv("LIBRARIAN_REQUEST_TIMEOUT", "300"))  # 5 minutes
-keep_alive_timeout = int(os.getenv("LIBRARIAN_KEEP_ALIVE_TIMEOUT", "5"))
-
-# Security event logging configuration
-log_security_events = os.getenv("LIBRARIAN_LOG_SECURITY_EVENTS", "true").lower() == "true"
-
-logger.info(f"Configuration loaded: host={host}, port={port}, debug={debug_mode}")
-logger.info(f"Letta config: base_url={letta_base_url}, timeout={letta_timeout}")
-logger.info(f"Security: ip_filtering={enable_ip_filtering}, api_key_required={api_key_required}")
-logger.info(f"Rate limiting: enabled={rate_limit_enabled}, requests={rate_limit_requests}/window={rate_limit_window}")
+# Log configuration summary
+config.log_summary()
 
 # Initialize FastAPI app
 app = FastAPI(
     title=os.getenv("LIBRARIAN_TITLE", "The Librarian"),
     description=os.getenv("LIBRARIAN_DESCRIPTION", "OpenAI-Compatible Letta Proxy"),
     version=os.getenv("LIBRARIAN_VERSION", "0.1.0"),
-    docs_url="/docs" if docs_enabled else None,
-    redoc_url="/redoc" if docs_enabled else None,
+    docs_url="/docs" if (config.debug or config.enable_docs) else None,
+    redoc_url="/redoc" if (config.debug or config.enable_docs) else None,
 )
 
 # Add security middleware (all features are configurable and opt-in)
 app.add_middleware(
     SecurityMiddleware,
-    enable_ip_filtering=enable_ip_filtering,
-    allowed_ips=allowed_ips,
-    blocked_ips=blocked_ips,
-    api_key_required=api_key_required,
-    api_key=api_key,
-    rate_limit_enabled=rate_limit_enabled,
-    rate_limit_requests=rate_limit_requests,
-    rate_limit_window=rate_limit_window,
-    log_security_events=log_security_events
+    enable_ip_filtering=config.enable_ip_filtering,
+    allowed_ips=config.allowed_ips,
+    blocked_ips=config.blocked_ips,
+    api_key_required=config.api_key_required,
+    api_key=config.api_key,
+    rate_limit_enabled=config.rate_limit_enabled,
+    rate_limit_requests=config.rate_limit_requests,
+    rate_limit_window=config.rate_limit_window,
+    log_security_events=config.log_security_events
 )
 
 # Initialize Letta client with configuration
@@ -161,7 +127,14 @@ token_counter = TokenCounter()
 
 # Initialize advanced components
 tool_synchronizer = ToolSynchronizer(letta_client)
-load_manager = LoadManager()
+load_manager = LoadManager(
+    max_concurrent=config.max_concurrent,
+    duplication_threshold=config.duplication_threshold,
+    queue_timeout=config.queue_timeout,
+    cleanup_interval=config.cleanup_interval,
+    enable_auto_duplication=config.enable_auto_duplication,
+    max_clones_per_agent=config.max_clones_per_agent
+)
 
 # Thread pool for running synchronous Letta calls in async context
 thread_pool = ThreadPoolExecutor(max_workers=10)
@@ -345,7 +318,7 @@ async def handle_non_streaming_response(
                     chunk_content = response_formatter._extract_content(chunk)
                     if chunk_content:
                         response_content += chunk_content
-                
+        
                 # If we got here and have content, request succeeded
                 if response_content or attempt == max_retries - 1:
                     # Calculate token usage (include system_content with [API] indicator)
@@ -1319,17 +1292,17 @@ async def completions(request: Dict[str, Any]):
     raise HTTPException(status_code=400, detail="Legacy completions format not supported")
 
 if __name__ == "__main__":
-    logger.info(f"Starting The Librarian on {host}:{port}")
-    logger.info(f"Debug mode: {debug_mode}")
-    logger.info(f"Documentation: {'enabled' if docs_enabled else 'disabled'}")
+    logger.info(f"Starting The Librarian on {config.host}:{config.port}")
+    logger.info(f"Debug mode: {config.debug}")
+    logger.info(f"Documentation: {'enabled' if (config.debug or config.enable_docs) else 'disabled'}")
     
     uvicorn.run(
         "main:app",
-        host=host,
-        port=port,
-        reload=debug_mode,
-        log_level="debug" if debug_mode else "info",
-        timeout_keep_alive=keep_alive_timeout,
-        limit_max_requests=max_request_size,
-        access_log=debug_mode
+        host=config.host,
+        port=config.port,
+        reload=config.debug,
+        log_level="debug" if config.debug else "info",
+        timeout_keep_alive=config.keep_alive_timeout,
+        limit_max_requests=config.max_request_size,
+        access_log=config.debug
     )
