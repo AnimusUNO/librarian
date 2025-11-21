@@ -48,6 +48,7 @@ from src.librarian.agent_config_manager import AgentConfigManager
 from src.librarian.error_handler import ErrorHandler, ErrorHandlingResult, ErrorType
 from src.librarian.stream_processor import StreamProcessor
 from src.librarian.response_builder import ResponseBuilder
+from src.librarian.request_processor import RequestProcessor, ProcessedRequest
 
 # Load and validate configuration
 config = Config.load()
@@ -143,6 +144,14 @@ agent_config_manager = AgentConfigManager(letta_client)
 error_handler = ErrorHandler()
 stream_processor = StreamProcessor(letta_client, response_formatter)
 response_builder = ResponseBuilder()
+request_processor = RequestProcessor(
+    model_registry,
+    message_translator,
+    token_counter,
+    tool_synchronizer,
+    letta_client,
+    check_token_capacity
+)
 
 # Thread pool for running synchronous Letta calls in async context
 thread_pool = ThreadPoolExecutor(max_workers=10)
@@ -893,121 +902,68 @@ async def chat_completions(request: ChatCompletionRequest):
     """Main OpenAI-compatible chat completions endpoint"""
     
     try:
-        # Validate model
+        # HTTP validation: model check
         if not model_registry.is_valid_model(request.model):
             raise HTTPException(
                 status_code=400,
                 detail={"error": {"message": f"Unknown model: {request.model}", "type": "invalid_request_error"}}
             )
         
-        # Get agent configuration
-        agent_config = model_registry.get_agent_config(request.model)
-        agent_id = agent_config['agent_id']
-        logger.info(f"Processing request for model {request.model} -> agent {agent_id}")
-        
-        # Convert messages to Letta format first to extract system content
-        openai_messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
-        letta_messages, system_content = message_translator.translate_messages(openai_messages)
-        
-        # Add API call indicator - all requests via /v1/chat/completions are API calls
-        api_indicator = "[API]"
-        
-        # Add mode selection instruction to system content
-        mode_instruction = message_translator.create_mode_selection_instruction(agent_config['mode'])
-        if system_content:
-            system_content = f"{api_indicator}\n\n{system_content}\n\n{mode_instruction}"
-        else:
-            system_content = f"{api_indicator}\n\n{mode_instruction}"
-        
-        # Estimate request tokens including [API] indicator and mode instruction
-        # Create a complete message list that includes the system content for accurate token counting
-        messages_for_counting = []
-        if system_content:
-            # Add system content as a system message for token counting
-            messages_for_counting.append({"role": "system", "content": system_content})
-        # Add all non-system messages
-        for msg in openai_messages:
-            if msg["role"] != "system":  # System messages are already in system_content
-                messages_for_counting.append(msg)
-        
-        estimated_prompt_tokens = token_counter.count_messages_tokens(messages_for_counting, request.model)
-        
-        # Check token capacity (only errors if max_tokens exceeds model's absolute maximum)
-        is_valid, error_message, capacity_info = await check_token_capacity(
-            agent_id, 
-            estimated_prompt_tokens,
-            requested_max_tokens=request.max_tokens
-        )
-        if not is_valid:
+        # Delegate business logic to RequestProcessor
+        try:
+            processed = await request_processor.process_request(request, user_id=request.user)
+        except ValueError as e:
+            # Business logic validation error - convert to HTTP error
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": {
-                        "message": error_message or "Request exceeds model's maximum token capacity",
+                        "message": str(e),
                         "type": "invalid_request_error",
                         "code": "context_length_exceeded"
                     }
                 }
             )
         
-        # Sync tools if provided
-        if request.tools:
-            await tool_synchronizer.sync_tools(agent_id, request.tools)
-        
-        # Convert to MessageCreate objects with TextContent (same format as reference)
-        message_objects = []
-        for msg in letta_messages:
-            # message_translator returns content as list of dicts: [{"type": "text", "text": "..."}]
-            # Convert to TextContent objects like reference implementation
-            content = msg["content"]
-            if isinstance(content, list):
-                # Convert list of dicts to TextContent objects
-                text_content = [TextContent(text=item["text"]) for item in content if isinstance(item, dict) and item.get("type") == "text"]
-            else:
-                # Fallback: wrap string in TextContent
-                text_content = [TextContent(text=str(content))]
-            
-            # Only include tool_call_id if it exists (don't pass None)
-            msg_kwargs = {
-                "role": msg["role"],
-                "content": text_content
-            }
-            if msg.get("tool_call_id"):
-                msg_kwargs["tool_call_id"] = msg["tool_call_id"]
-            
-            message_objects.append(MessageCreate(**msg_kwargs))
-        
-        # Handle streaming vs non-streaming with queueing
+        # Route to appropriate handler (HTTP concern)
         if request.stream:
             # For streaming, we need to yield from generator, so handle queueing inline
             return await handle_streaming_response_with_queue(
                 load_manager,
-                agent_id, message_objects, request.model, 
-                openai_messages, system_content, request.user,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature
+                processed.agent_id,
+                processed.message_objects,
+                processed.model_name,
+                processed.openai_messages,
+                processed.system_content,
+                processed.user_id,
+                max_tokens=processed.max_tokens,
+                temperature=processed.temperature
             )
         else:
             # For non-streaming, use queue processing
             async def processor():
                 return await handle_non_streaming_response(
-                    agent_id, message_objects, request.model,
-                    openai_messages, system_content, request.user,
-                    max_tokens=request.max_tokens,
-                    temperature=request.temperature
+                    processed.agent_id,
+                    processed.message_objects,
+                    processed.model_name,
+                    processed.openai_messages,
+                    processed.system_content,
+                    processed.user_id,
+                    max_tokens=processed.max_tokens,
+                    temperature=processed.temperature
                 )
             
             return await load_manager.process_with_queue(
-                agent_id,
-                openai_messages,
+                processed.agent_id,
+                processed.openai_messages,
                 processor,
-                user_id=request.user
+                user_id=processed.user_id
             )
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing chat completion: {str(e)}")
+        logger.error(f"Error processing chat completion: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={"error": {"message": "Internal server error", "type": "server_error"}}

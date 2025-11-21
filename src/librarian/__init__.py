@@ -30,6 +30,7 @@ from .agent_config_manager import AgentConfigManager
 from .error_handler import ErrorHandler, ErrorHandlingResult, ErrorType
 from .stream_processor import StreamProcessor
 from .response_builder import ResponseBuilder
+from .request_processor import RequestProcessor, ProcessedRequest
 
 __all__ = [
     "ModelRegistry",
