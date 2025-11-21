@@ -44,6 +44,7 @@ from src.librarian.tool_synchronizer import ToolSynchronizer
 from src.librarian.load_manager import LoadManager, RequestStatus
 from src.librarian.security import SecurityMiddleware
 from src.librarian.config import Config
+from src.librarian.agent_config_manager import AgentConfigManager
 
 # Load and validate configuration
 config = Config.load()
@@ -135,6 +136,7 @@ load_manager = LoadManager(
     enable_auto_duplication=config.enable_auto_duplication,
     max_clones_per_agent=config.max_clones_per_agent
 )
+agent_config_manager = AgentConfigManager(letta_client)
 
 # Thread pool for running synchronous Letta calls in async context
 thread_pool = ThreadPoolExecutor(max_workers=10)
@@ -169,84 +171,6 @@ class ModelInfo(BaseModel):
 
 # Model registry is now handled by the ModelRegistry component
 
-async def configure_agent_for_request(
-    agent_id: str,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None
-) -> Optional[LlmConfig]:
-    """
-    Configure agent's LLM settings for a request and return original config for restoration.
-    
-    Args:
-        agent_id: Letta agent ID
-        temperature: Temperature to set (None to leave unchanged)
-        max_tokens: Max tokens to set (None to leave unchanged)
-    
-    Returns:
-        Original LlmConfig if settings were changed, None otherwise
-    """
-    if temperature is None and max_tokens is None:
-        return None  # No changes needed
-    
-    try:
-        # Retrieve current agent state
-        agent_state = await letta_client.agents.retrieve(agent_id=agent_id)
-        current_llm_config = agent_state.llm_config
-        
-        if current_llm_config is None:
-            logger.warning(f"Agent {agent_id} has no llm_config, cannot configure")
-            return None
-        
-        # Store original config for restoration
-        original_config = current_llm_config
-        
-        # Create new config with updated values
-        config_dict = current_llm_config.model_dump()
-        if temperature is not None:
-            config_dict['temperature'] = temperature
-            logger.info(f"Setting temperature to {temperature} for agent {agent_id}")
-        if max_tokens is not None:
-            config_dict['max_tokens'] = max_tokens
-            logger.info(f"Setting max_tokens to {max_tokens} for agent {agent_id}")
-        
-        # Create new LlmConfig with updated values
-        new_llm_config = LlmConfig(**config_dict)
-        
-        # Modify agent
-        await letta_client.agents.modify(
-            agent_id=agent_id,
-            llm_config=new_llm_config
-        )
-        
-        logger.info(f"Successfully configured agent {agent_id} for request")
-        return original_config
-        
-    except Exception as e:
-        logger.error(f"Failed to configure agent {agent_id}: {str(e)}")
-        return None
-
-async def restore_agent_config(agent_id: str, original_config: LlmConfig) -> bool:
-    """
-    Restore agent's original LLM configuration.
-    
-    Args:
-        agent_id: Letta agent ID
-        original_config: Original LlmConfig to restore
-    
-    Returns:
-        True if restoration successful, False otherwise
-    """
-    try:
-        await letta_client.agents.modify(
-            agent_id=agent_id,
-            llm_config=original_config
-        )
-        logger.info(f"Successfully restored original config for agent {agent_id}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to restore config for agent {agent_id}: {str(e)}")
-        return False
-
 async def handle_non_streaming_response(
     agent_id: str, 
     message_objects: list, 
@@ -261,10 +185,8 @@ async def handle_non_streaming_response(
     """Handle non-streaming chat completion with automatic retry on context window full"""
     max_retries = 2  # Try original request + 1 retry after summarization
     
-    # Configure agent for this request (temperature, max_tokens)
-    original_config = await configure_agent_for_request(agent_id, temperature, max_tokens)
-    
-    try:
+    # Use context manager for agent configuration (automatically restores on exit)
+    async with agent_config_manager.temporary_config(agent_id, temperature=temperature, max_tokens=max_tokens):
         for attempt in range(max_retries):
             try:
                 # Use create_stream() and collect chunks
@@ -295,8 +217,6 @@ async def handle_non_streaming_response(
                                     break  # Break out of chunk loop, will retry outer loop
                                 else:
                                     # Summarization failed, raise error
-                                    if original_config is not None:
-                                        await restore_agent_config(agent_id, original_config)
                                     raise HTTPException(
                                         status_code=500,
                                         detail={"error": {"message": f"Letta agent error: {error_msg}", "type": "server_error"}}
@@ -304,8 +224,6 @@ async def handle_non_streaming_response(
                             else:
                                 # Not a context window error or no retries left
                                 logger.error(f"Error in Letta stream: {error_msg}")
-                                if original_config is not None:
-                                    await restore_agent_config(agent_id, original_config)
                                 raise HTTPException(
                                     status_code=500,
                                     detail={"error": {"message": f"Letta agent error: {error_msg}", "type": "server_error"}}
@@ -339,15 +257,10 @@ async def handle_non_streaming_response(
                         }],
                         usage=usage
                     )
-                    # Restore original config before returning
-                    if original_config is not None:
-                        await restore_agent_config(agent_id, original_config)
                     return response
                 
             except HTTPException:
                 # Re-raise HTTP exceptions (don't retry)
-                if original_config is not None:
-                    await restore_agent_config(agent_id, original_config)
                 raise
             except ApiError as api_error:
                 # Check if it's a context window full error
@@ -358,8 +271,6 @@ async def handle_non_streaming_response(
                         continue
                     else:
                         # Summarization failed, raise error
-                        if original_config is not None:
-                            await restore_agent_config(agent_id, original_config)
                         raise HTTPException(
                             status_code=500,
                             detail={"error": {"message": f"Letta API error: {str(api_error)}", "type": "server_error"}}
@@ -367,8 +278,6 @@ async def handle_non_streaming_response(
                 else:
                     # Not a context window error or no retries left
                     logger.error(f"Letta API error: {str(api_error)}", exc_info=True)
-                    if original_config is not None:
-                        await restore_agent_config(agent_id, original_config)
                     raise HTTPException(
                         status_code=500,
                         detail={"error": {"message": f"Letta API error: {str(api_error)}", "type": "server_error"}}
@@ -382,8 +291,6 @@ async def handle_non_streaming_response(
                         continue
                     else:
                         # Summarization failed, raise error
-                        if original_config is not None:
-                            await restore_agent_config(agent_id, original_config)
                         logger.error(f"Error in non-streaming response: {str(e)}", exc_info=True)
                         raise HTTPException(
                             status_code=500,
@@ -392,38 +299,16 @@ async def handle_non_streaming_response(
                 else:
                     # Not a context window error or no retries left
                     logger.error(f"Error in non-streaming response: {str(e)}", exc_info=True)
-                    if original_config is not None:
-                        await restore_agent_config(agent_id, original_config)
                     raise HTTPException(
                         status_code=500,
                         detail={"error": {"message": f"Failed to generate response: {str(e)}", "type": "server_error"}}
                     )
         
         # If we get here, all retries failed
-        if original_config is not None:
-            await restore_agent_config(agent_id, original_config)
         raise HTTPException(
             status_code=500,
             detail={"error": {"message": "Failed to generate response after retries", "type": "server_error"}}
         )
-    except Exception as e:
-        # Ensure config is restored even on unexpected errors
-        if original_config is not None:
-            await restore_agent_config(agent_id, original_config)
-        raise
-
-        # If we get here, all retries failed
-        if original_config is not None:
-            await restore_agent_config(agent_id, original_config)
-        raise HTTPException(
-            status_code=500,
-            detail={"error": {"message": "Failed to generate response after retries", "type": "server_error"}}
-        )
-    except Exception as e:
-        # Ensure config is restored even on unexpected errors
-        if original_config is not None:
-            await restore_agent_config(agent_id, original_config)
-        raise
 
 async def handle_streaming_response_with_queue(
     load_manager: LoadManager,
@@ -497,10 +382,8 @@ async def _generate_stream_chunks(
     """Generate stream chunks from Letta (internal helper) with retry on context window full"""
     max_retries = 2  # Try original request + 1 retry after summarization
     
-    # Configure agent for this request (temperature, max_tokens)
-    original_config = await configure_agent_for_request(agent_id, temperature, max_tokens)
-    
-    try:
+    # Use context manager for agent configuration (automatically restores on exit)
+    async with agent_config_manager.temporary_config(agent_id, temperature=temperature, max_tokens=max_tokens):
         for attempt in range(max_retries):
             should_retry = False
             try:
@@ -553,8 +436,6 @@ async def _generate_stream_chunks(
                                     }
                                     yield f"data: {json.dumps(error_chunk)}\n\n"
                                     yield "data: [DONE]\n\n"
-                                    if original_config is not None:
-                                        await restore_agent_config(agent_id, original_config)
                                     return
                             else:
                                 # Not a context window error or no retries left
@@ -567,8 +448,6 @@ async def _generate_stream_chunks(
                                 }
                                 yield f"data: {json.dumps(error_chunk)}\n\n"
                                 yield "data: [DONE]\n\n"
-                                if original_config is not None:
-                                    await restore_agent_config(agent_id, original_config)
                                 return
                         elif event_type == 'stop_reason':
                             stop_reason = getattr(chunk, 'stop_reason', None)
@@ -593,8 +472,6 @@ async def _generate_stream_chunks(
                                         }
                                         yield f"data: {json.dumps(error_chunk)}\n\n"
                                         yield "data: [DONE]\n\n"
-                                        if original_config is not None:
-                                            await restore_agent_config(agent_id, original_config)
                                         return
                                 else:
                                     # Not a context window error or no retries left
@@ -607,8 +484,6 @@ async def _generate_stream_chunks(
                                     }
                                     yield f"data: {json.dumps(error_chunk)}\n\n"
                                     yield "data: [DONE]\n\n"
-                                    if original_config is not None:
-                                        await restore_agent_config(agent_id, original_config)
                                     return
                             break
                         elif event_type == 'assistant_message':
@@ -684,9 +559,6 @@ async def _generate_stream_chunks(
                     
                     yield f"data: {json.dumps(final_chunk)}\n\n"
                     yield "data: [DONE]\n\n"
-                    # Restore original config before returning
-                    if original_config is not None:
-                        await restore_agent_config(agent_id, original_config)
                     return  # Success, exit function
                     
                 except Exception as stream_error:
@@ -707,8 +579,6 @@ async def _generate_stream_chunks(
                             }
                             yield f"data: {json.dumps(error_chunk)}\n\n"
                             yield "data: [DONE]\n\n"
-                            if original_config is not None:
-                                await restore_agent_config(agent_id, original_config)
                             return
                     else:
                         # Not a context window error or no retries left
@@ -721,8 +591,6 @@ async def _generate_stream_chunks(
                         }
                         yield f"data: {json.dumps(error_chunk)}\n\n"
                         yield "data: [DONE]\n\n"
-                        if original_config is not None:
-                            await restore_agent_config(agent_id, original_config)
                         return
                 
             except ApiError as api_error:
@@ -742,8 +610,6 @@ async def _generate_stream_chunks(
                         }
                         yield f"data: {json.dumps(error_chunk)}\n\n"
                         yield "data: [DONE]\n\n"
-                        if original_config is not None:
-                            await restore_agent_config(agent_id, original_config)
                         return
                 else:
                     # Not a context window error or no retries left
@@ -756,8 +622,6 @@ async def _generate_stream_chunks(
                     }
                     yield f"data: {json.dumps(error_chunk)}\n\n"
                     yield "data: [DONE]\n\n"
-                    if original_config is not None:
-                        await restore_agent_config(agent_id, original_config)
                     return
             except Exception as e:
                 # Check if it's a context window full error
@@ -777,8 +641,6 @@ async def _generate_stream_chunks(
                         }
                         yield f"data: {json.dumps(error_chunk)}\n\n"
                         yield "data: [DONE]\n\n"
-                        if original_config is not None:
-                            await restore_agent_config(agent_id, original_config)
                         return
                 else:
                     # Not a context window error or no retries left
@@ -791,28 +653,12 @@ async def _generate_stream_chunks(
                     }
                     yield f"data: {json.dumps(error_chunk)}\n\n"
                     yield "data: [DONE]\n\n"
-                    if original_config is not None:
-                        await restore_agent_config(agent_id, original_config)
                     return
-    
+        
         # If we get here, all retries failed
-        if original_config is not None:
-            await restore_agent_config(agent_id, original_config)
         error_chunk = {
             "error": {
                 "message": "Failed to generate stream after retries",
-                "type": "server_error"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-        yield "data: [DONE]\n\n"
-    except Exception as e:
-        # Ensure config is restored even on unexpected errors
-        if original_config is not None:
-            await restore_agent_config(agent_id, original_config)
-        error_chunk = {
-            "error": {
-                "message": f"Unexpected error: {str(e)}",
                 "type": "server_error"
             }
         }

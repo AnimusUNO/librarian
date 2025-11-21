@@ -26,6 +26,7 @@ from .token_counter import TokenCounter
 from .tool_synchronizer import ToolSynchronizer
 from .load_manager import LoadManager
 from .config import Config
+from .agent_config_manager import AgentConfigManager
 
 __all__ = [
     "ModelRegistry",
@@ -34,5 +35,6 @@ __all__ = [
     "TokenCounter",
     "ToolSynchronizer",
     "LoadManager",
-    "Config"
+    "Config",
+    "AgentConfigManager"
 ]
