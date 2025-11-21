@@ -84,9 +84,9 @@ app.add_middleware(
 
 # Initialize Letta client with configuration
 letta_client = AsyncLetta(
-    base_url=letta_base_url,
-    token=letta_api_key,
-    timeout=letta_timeout
+    base_url=config.letta_base_url,
+    token=config.letta_api_key,
+    timeout=config.letta_timeout
 )
 
 # Initialize components
