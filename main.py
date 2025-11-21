@@ -144,14 +144,6 @@ agent_config_manager = AgentConfigManager(letta_client)
 error_handler = ErrorHandler()
 stream_processor = StreamProcessor(letta_client, response_formatter)
 response_builder = ResponseBuilder()
-request_processor = RequestProcessor(
-    model_registry,
-    message_translator,
-    token_counter,
-    tool_synchronizer,
-    letta_client,
-    check_token_capacity
-)
 
 # Thread pool for running synchronous Letta calls in async context
 thread_pool = ThreadPoolExecutor(max_workers=10)
@@ -896,6 +888,16 @@ async def check_token_capacity(
         logger.warning(f"Failed to check token capacity for agent {agent_id}: {e}")
         # If we can't check, allow the request (fail open)
         return True, None, None
+
+# Initialize request_processor after check_token_capacity is defined
+request_processor = RequestProcessor(
+    model_registry,
+    message_translator,
+    token_counter,
+    tool_synchronizer,
+    letta_client,
+    check_token_capacity
+)
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
