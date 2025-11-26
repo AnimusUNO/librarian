@@ -122,32 +122,35 @@ class TokenCounter:
         return input_cost + output_cost
     
     def get_model_info(self, model: str) -> Dict[str, any]:
-        """Get information about a model's tokenizer"""
+        """
+        Get information about a model's tokenizer.
+        
+        Note: max_tokens is no longer returned as it should be obtained
+        dynamically from Letta API via TokenLimitService.
+        """
         encoding = self.encodings.get(model, self.encodings["gpt-4"])
         
         return {
             "model": model,
             "encoding_name": encoding.name,
             "vocab_size": encoding.n_vocab,
-            "max_tokens": self._get_max_tokens(model)
+            # max_tokens removed - use TokenLimitService.get_agent_token_limits() instead
         }
     
-    def _get_max_tokens(self, model: str) -> int:
-        """Get maximum tokens for a model"""
-        max_tokens = {
-            "gpt-3.5-turbo": 4096,
-            "gpt-4": 8192,
-            "gpt-4.1": 128000,  # gpt-4.1 has large context window
-            "gpt-4-turbo": 128000,
-            "gpt-4o": 128000,
-            "gpt-4o-mini": 128000,
-        }
-        return max_tokens.get(model, 8192)
-    
-    def truncate_to_max_tokens(self, text: str, model: str, max_tokens: Optional[int] = None) -> str:
-        """Truncate text to fit within token limit"""
+    def truncate_to_max_tokens(self, text: str, model: str, max_tokens: int) -> str:
+        """
+        Truncate text to fit within token limit.
+        
+        Args:
+            text: Text to truncate
+            model: Model name for token counting
+            max_tokens: Maximum tokens (required - no default)
+        
+        Returns:
+            Truncated text
+        """
         if max_tokens is None:
-            max_tokens = self._get_max_tokens(model)
+            raise ValueError("max_tokens parameter is required. Use TokenLimitService to get dynamic limits.")
         
         encoding = self.encodings.get(model, self.encodings["gpt-4"])
         tokens = encoding.encode(text)

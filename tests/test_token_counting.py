@@ -65,7 +65,7 @@ def test_token_counting():
     print(f"Model info for gpt-4:")
     print(f"  Encoding: {model_info['encoding_name']}")
     print(f"  Vocab size: {model_info['vocab_size']}")
-    print(f"  Max tokens: {model_info['max_tokens']}")
+    # Note: max_tokens removed - use TokenLimitService for dynamic limits
     print()
     
     print("Token counting tests completed!")

@@ -28,6 +28,7 @@ class TestRequestProcessor:
         tool_synchronizer = MagicMock()
         letta_client = AsyncMock()
         check_token_capacity_func = AsyncMock()
+        token_limit_service = AsyncMock()
         
         return {
             'model_registry': model_registry,
@@ -35,7 +36,8 @@ class TestRequestProcessor:
             'token_counter': token_counter,
             'tool_synchronizer': tool_synchronizer,
             'letta_client': letta_client,
-            'check_token_capacity_func': check_token_capacity_func
+            'check_token_capacity_func': check_token_capacity_func,
+            'token_limit_service': token_limit_service
         }
     
     @pytest.fixture
@@ -81,6 +83,8 @@ class TestRequestProcessor:
         )
         mock_components['message_translator'].create_mode_selection_instruction.return_value = "Mode instruction"
         mock_components['token_counter'].count_messages_tokens.return_value = 10
+        # When max_tokens is None, calculate_optimal_max_tokens is called
+        mock_components['token_limit_service'].calculate_optimal_max_tokens = AsyncMock(return_value=1000)
         mock_components['check_token_capacity_func'].return_value = (True, None, None)
         
         # Process request
@@ -95,6 +99,15 @@ class TestRequestProcessor:
         assert "Mode instruction" in processed.system_content
         assert len(processed.message_objects) == 1
         assert isinstance(processed.message_objects[0], MessageCreate)
+        # max_tokens should be calculated (not None)
+        assert processed.max_tokens == 1000
+        # Verify calculate_optimal_max_tokens was called
+        mock_components['token_limit_service'].calculate_optimal_max_tokens.assert_called_once_with(
+            agent_id='agent-123',
+            request_tokens=10,
+            safety_margin=100,
+            minimum_max_tokens=50
+        )
     
     @pytest.mark.asyncio
     async def test_process_request_with_tools(self, request_processor, mock_request, mock_components):
@@ -110,6 +123,8 @@ class TestRequestProcessor:
         )
         mock_components['message_translator'].create_mode_selection_instruction.return_value = "Mode instruction"
         mock_components['token_counter'].count_messages_tokens.return_value = 10
+        # When max_tokens is None, calculate_optimal_max_tokens is called
+        mock_components['token_limit_service'].calculate_optimal_max_tokens = AsyncMock(return_value=1000)
         mock_components['check_token_capacity_func'].return_value = (True, None, None)
         mock_components['tool_synchronizer'].sync_tools = AsyncMock()
         
@@ -136,6 +151,8 @@ class TestRequestProcessor:
         )
         mock_components['message_translator'].create_mode_selection_instruction.return_value = "Mode instruction"
         mock_components['token_counter'].count_messages_tokens.return_value = 10
+        # When max_tokens is None, calculate_optimal_max_tokens is called
+        mock_components['token_limit_service'].calculate_optimal_max_tokens = AsyncMock(return_value=1000)
         mock_components['check_token_capacity_func'].return_value = (
             False,
             "Request exceeds model's maximum token capacity",
@@ -145,6 +162,34 @@ class TestRequestProcessor:
         # Process request should raise ValueError
         with pytest.raises(ValueError, match="Request exceeds model's maximum token capacity"):
             await request_processor.process_request(mock_request)
+    
+    @pytest.mark.asyncio
+    async def test_process_request_with_max_tokens_specified(self, request_processor, mock_request, mock_components):
+        """Test request processing when user specifies max_tokens"""
+        # Setup mocks
+        mock_components['model_registry'].get_agent_config.return_value = {
+            'agent_id': 'agent-123',
+            'mode': 'auto'
+        }
+        mock_components['message_translator'].translate_messages.return_value = (
+            [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            None
+        )
+        mock_components['message_translator'].create_mode_selection_instruction.return_value = "Mode instruction"
+        mock_components['token_counter'].count_messages_tokens.return_value = 10
+        mock_components['check_token_capacity_func'].return_value = (True, None, None)
+        
+        # User specified max_tokens
+        mock_request.max_tokens = 500
+        
+        # Process request
+        processed = await request_processor.process_request(mock_request)
+        
+        # Verify max_tokens is used (not calculated)
+        assert processed.max_tokens == 500
+        # calculate_optimal_max_tokens should NOT be called when max_tokens is specified
+        if hasattr(mock_components['token_limit_service'], 'calculate_optimal_max_tokens'):
+            mock_components['token_limit_service'].calculate_optimal_max_tokens.assert_not_called()
     
     @pytest.mark.asyncio
     async def test_prepare_messages(self, request_processor, mock_components):
@@ -202,14 +247,15 @@ class TestRequestProcessor:
         """Test token capacity validation - valid"""
         mock_components['check_token_capacity_func'].return_value = (True, None, None)
         
+        # requested_max_tokens is now always provided (never None)
         is_valid, error_message = await request_processor.validate_token_capacity(
-            "agent-123", 100, None
+            "agent-123", 100, 1000
         )
         
         assert is_valid is True
         assert error_message is None
         mock_components['check_token_capacity_func'].assert_called_once_with(
-            "agent-123", 100, requested_max_tokens=None
+            "agent-123", 100, requested_max_tokens=1000
         )
     
     @pytest.mark.asyncio

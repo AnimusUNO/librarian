@@ -54,7 +54,8 @@ class RequestProcessor:
         token_counter,
         tool_synchronizer,
         letta_client: AsyncLetta,
-        check_token_capacity_func
+        check_token_capacity_func,
+        token_limit_service
     ):
         """
         Initialize request processor.
@@ -66,6 +67,7 @@ class RequestProcessor:
             tool_synchronizer: ToolSynchronizer instance
             letta_client: AsyncLetta client instance
             check_token_capacity_func: Function to check token capacity
+            token_limit_service: TokenLimitService instance
         """
         self.model_registry = model_registry
         self.message_translator = message_translator
@@ -73,6 +75,7 @@ class RequestProcessor:
         self.tool_synchronizer = tool_synchronizer
         self.letta_client = letta_client
         self.check_token_capacity = check_token_capacity_func
+        self.token_limit_service = token_limit_service
     
     async def process_request(
         self,
@@ -104,11 +107,29 @@ class RequestProcessor:
             request.model
         )
         
+        # Determine max_tokens to use
+        if request.max_tokens is None:
+            # User didn't specify - calculate optimal maximum
+            optimal_max = await self.token_limit_service.calculate_optimal_max_tokens(
+                agent_id=agent_id,
+                request_tokens=estimated_tokens,
+                safety_margin=100,
+                minimum_max_tokens=50
+            )
+            max_tokens_to_use = optimal_max
+            logger.info(
+                f"Calculated optimal max_tokens: {optimal_max:,} for agent {agent_id} "
+                f"(request_tokens: {estimated_tokens:,})"
+            )
+        else:
+            # User specified max_tokens - validate and use
+            max_tokens_to_use = request.max_tokens
+        
         # Validate token capacity
         is_valid, error_message = await self.validate_token_capacity(
             agent_id,
             estimated_tokens,
-            request.max_tokens
+            max_tokens_to_use
         )
         if not is_valid:
             raise ValueError(error_message or "Request exceeds model's maximum token capacity")
@@ -132,7 +153,7 @@ class RequestProcessor:
             openai_messages=openai_messages,
             system_content=system_content,
             user_id=user_id or request.user,
-            max_tokens=request.max_tokens,
+            max_tokens=max_tokens_to_use,  # Always set (never None)
             temperature=request.temperature
         )
     
@@ -188,7 +209,7 @@ class RequestProcessor:
         self,
         agent_id: str,
         estimated_tokens: int,
-        requested_max_tokens: Optional[int]
+        requested_max_tokens: int  # Now always provided (never None)
     ) -> Tuple[bool, Optional[str]]:
         """
         Validate token capacity.
@@ -196,7 +217,7 @@ class RequestProcessor:
         Args:
             agent_id: Letta agent ID
             estimated_tokens: Estimated tokens for the prompt
-            requested_max_tokens: Requested max_tokens value
+            requested_max_tokens: Requested max_tokens value (always provided, calculated if user didn't specify)
             
         Returns:
             (is_valid, error_message)

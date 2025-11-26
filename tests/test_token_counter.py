@@ -255,7 +255,7 @@ class TestTokenCounter:
             assert isinstance(cost, float)
     
     def test_get_model_info(self):
-        """Test getting model information"""
+        """Test getting model information (max_tokens removed - use TokenLimitService)"""
         counter = TokenCounter()
         info = counter.get_model_info("gpt-4")
         assert info is not None
@@ -263,7 +263,8 @@ class TestTokenCounter:
         assert 'model' in info
         assert 'encoding_name' in info
         assert 'vocab_size' in info
-        assert 'max_tokens' in info
+        # max_tokens removed - should use TokenLimitService for dynamic limits
+        assert 'max_tokens' not in info
         assert info['model'] == "gpt-4"
     
     def test_get_model_info_different_models(self):
@@ -273,19 +274,8 @@ class TestTokenCounter:
         for model in models:
             info = counter.get_model_info(model)
             assert info['model'] == model
-            assert info['max_tokens'] > 0
-    
-    def test_get_max_tokens(self):
-        """Test getting max tokens for models"""
-        counter = TokenCounter()
-        max_tokens = counter._get_max_tokens("gpt-4")
-        assert max_tokens == 8192
-        
-        max_tokens = counter._get_max_tokens("gpt-4.1")
-        assert max_tokens == 128000
-        
-        max_tokens = counter._get_max_tokens("unknown-model")
-        assert max_tokens == 8192  # Default
+            # max_tokens removed - should use TokenLimitService for dynamic limits
+            assert 'max_tokens' not in info
     
     def test_truncate_to_max_tokens(self):
         """Test truncating text to max tokens"""
@@ -307,15 +297,14 @@ class TestTokenCounter:
         # Should be unchanged
         assert truncated == short_text
     
-    def test_truncate_to_max_tokens_default(self):
-        """Test truncating with default max_tokens"""
+    def test_truncate_to_max_tokens_requires_parameter(self):
+        """Test that truncate_to_max_tokens requires max_tokens parameter"""
         counter = TokenCounter()
         long_text = "word " * 10000
-        truncated = counter.truncate_to_max_tokens(long_text, "gpt-4")
         
-        # Should use model's default max_tokens
-        tokens = counter.count_tokens(truncated, "gpt-4")
-        assert tokens <= counter._get_max_tokens("gpt-4")
+        # Should raise ValueError if max_tokens is None
+        with pytest.raises(ValueError, match="max_tokens parameter is required"):
+            counter.truncate_to_max_tokens(long_text, "gpt-4", max_tokens=None)
 
 
 if __name__ == "__main__":

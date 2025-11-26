@@ -49,6 +49,7 @@ from src.librarian.error_handler import ErrorHandler, ErrorHandlingResult, Error
 from src.librarian.stream_processor import StreamProcessor
 from src.librarian.response_builder import ResponseBuilder
 from src.librarian.request_processor import RequestProcessor, ProcessedRequest
+from src.librarian.token_limit_service import TokenLimitService
 
 # Load and validate configuration
 config = Config.load()
@@ -132,6 +133,7 @@ token_counter = TokenCounter()
 
 # Initialize advanced components
 tool_synchronizer = ToolSynchronizer(letta_client)
+token_limit_service = TokenLimitService(letta_client, cache_ttl=300)  # 5 minutes
 load_manager = LoadManager(
     max_concurrent=config.max_concurrent,
     duplication_threshold=config.duplication_threshold,
@@ -826,7 +828,7 @@ async def summarize_agent_conversation(agent_id: str, max_message_length: int = 
 async def check_token_capacity(
     agent_id: str, 
     request_tokens: int, 
-    requested_max_tokens: Optional[int] = None
+    requested_max_tokens: int  # Now always provided (never None)
 ) -> tuple[bool, Optional[str], Optional[Dict[str, int]]]:
     """
     Check if request is valid based on current token usage and model limits.
@@ -836,43 +838,39 @@ async def check_token_capacity(
     Args:
         agent_id: Letta agent ID
         request_tokens: Estimated tokens for the prompt
-        requested_max_tokens: max_tokens value requested by user (None if not specified)
+        requested_max_tokens: max_tokens value (always provided, calculated if user didn't specify)
     
     Returns:
         (is_valid, error_message, capacity_info) where:
         - is_valid: True if request is valid (or will be handled by summarization)
         - error_message: Error message if invalid, None if valid
-        - capacity_info: Dict with max_tokens, current_tokens, available_tokens, request_tokens
+        - capacity_info: Dict with max_tokens, current_tokens, available_tokens, request_tokens, requested_max_tokens
     """
     try:
-        # Get current context from Letta
-        context = await letta_client.agents.context.retrieve(agent_id=agent_id)
-        context_dict = context.model_dump()
-        
-        # Get current usage and max window size (model's absolute maximum)
-        current_tokens = context_dict.get('context_window_size_current', 0)
-        max_context_window = context_dict.get('context_window_size_max', 0)  # Model's absolute max
+        # Get limits from TokenLimitService (uses Letta API with caching)
+        limits = await token_limit_service.get_agent_token_limits(agent_id)
+        max_context_window = limits['max_context_window']
+        current_tokens = limits['current_tokens']
+        available_tokens = limits['available_tokens']
         
         capacity_info = {
             'max_tokens': max_context_window,
             'current_tokens': current_tokens,
-            'available_tokens': max_context_window - current_tokens,
-            'request_tokens': request_tokens
+            'available_tokens': available_tokens,
+            'request_tokens': request_tokens,
+            'requested_max_tokens': requested_max_tokens
         }
         
-        # Only error if requested_max_tokens exceeds the model's absolute maximum capability
-        if requested_max_tokens is not None:
-            if requested_max_tokens > max_context_window:
-                error_msg = (
-                    f"Requested max_tokens ({requested_max_tokens:,}) exceeds model's maximum capability "
-                    f"({max_context_window:,} tokens)."
-                )
-                return False, error_msg, capacity_info
+        # Validate requested_max_tokens against model's absolute maximum capability
+        if requested_max_tokens > max_context_window:
+            error_msg = (
+                f"Requested max_tokens ({requested_max_tokens:,}) exceeds model's maximum capability "
+                f"({max_context_window:,} tokens)."
+            )
+            return False, error_msg, capacity_info
         
-        # For small requests, calculate total needed but don't error - let summarization handle it
-        # Total needed = current usage + request tokens + completion tokens
-        estimated_completion_tokens = requested_max_tokens if requested_max_tokens is not None else 100
-        total_needed = current_tokens + request_tokens + estimated_completion_tokens
+        # Calculate total needed
+        total_needed = current_tokens + request_tokens + requested_max_tokens
         
         # Log if we're over capacity (but don't error - summarization will handle it)
         if total_needed > max_context_window:
@@ -896,7 +894,8 @@ request_processor = RequestProcessor(
     token_counter,
     tool_synchronizer,
     letta_client,
-    check_token_capacity
+    check_token_capacity,
+    token_limit_service
 )
 
 @app.post("/v1/chat/completions")
